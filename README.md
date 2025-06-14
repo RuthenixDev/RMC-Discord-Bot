@@ -1,0 +1,2 @@
+# RMC Discord Bot
+
