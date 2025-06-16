@@ -3,6 +3,7 @@ from discord.ext import commands
 from dotenv import load_dotenv
 import os
 import json
+import time
 
 load_dotenv()
 TOKEN = os.getenv("TOKEN")
@@ -11,8 +12,8 @@ intents = discord.Intents.all()
 bot = commands.Bot(command_prefix="!rmc ", intents=intents)
 
 SETTINGS_FILE = "settings.json"
-
 RMC_EMBED_COLOR = 0x00ccff
+COOLDOWN = 600
 
 # ===================== Работа с settings.json =====================
 def load_settings():
@@ -25,9 +26,13 @@ def save_settings(data):
     with open(SETTINGS_FILE, "w") as f:
         json.dump(data, f, indent=4)
 
+##############################
 settings = load_settings()
 star_channel_ids = set(settings.get("star_channels", []))
 admin_roles_ids = set(settings.get("admin_roles", []))
+filter_channel_ids = set(settings.get("filter_channels", []))
+filter_timeouts = settings.get("filter_timeout", {})
+##############################
 
 def update_star_channels():
     settings["star_channels"] = list(star_channel_ids)
@@ -37,12 +42,55 @@ def update_admin_roles():
     settings["admin_roles"] = list(admin_roles_ids)
     save_settings(settings)
 
+def update_filter_channels():
+    settings["filter_channels"] = list(filter_channel_ids)
+    save_settings(settings)
+
+def update_filter_timeouts():
+    settings["filter_timeout"] = filter_timeouts
+    save_settings(settings)
+
 # ===================== Событие запуска =====================
 @bot.event
 async def on_ready():
     print(f"Бот {bot.user} запущен!")
 
 # ===================== Ивенты =====================
+async def handle_filter_violation(message):
+    user_id_str = str(message.author.id)
+    now = int(time.time())
+    filter_timeouts = settings.setdefault("filter_timeout", {})
+    last_violation = filter_timeouts.get(user_id_str, 0)
+
+    has_attachments = bool(message.attachments)
+    has_links = ("http://" in message.content) or ("https://" in message.content)
+
+    if not has_attachments and not has_links:
+        try:
+            await message.delete()
+            print(f"Удалено сообщение от {message.author} в {message.channel.name} без вложений и ссылок")
+
+            if now - last_violation >= COOLDOWN:
+                filter_timeouts[user_id_str] = now
+                update_filter_timeouts()
+
+                embed = discord.Embed(
+                    title="📵 Только медиа-сообщения!",
+                    description="Этот канал предназначен **только для изображений, видео или ссылок**.\n\n"
+                                "Пожалуйста, не отправляй обычные текстовые сообщения без вложений.",
+                    color=RMC_EMBED_COLOR
+                )
+                try:
+                    await message.author.send(embed=embed)
+                except discord.Forbidden:
+                    print(f"Не удалось отправить ЛС пользователю {message.author}")
+        except discord.Forbidden:
+            print(f"Нет прав удалять сообщения в {message.channel.name}")
+        except discord.HTTPException as e:
+            print(f"Ошибка при удалении сообщения: {e}")
+
+
+
 @bot.event
 async def on_message(message):
     if message.author.bot:
@@ -74,14 +122,23 @@ async def on_message(message):
             print(f"Нет прав для создания ветки в канале {message.channel.name}")
         except discord.HTTPException as e:
             print(f"Ошибка при создании ветки: {e}")
+
+
+    if message.channel.id in filter_channel_ids:
+        if any(role.id in admin_roles_ids for role in message.author.roles):
+            await bot.process_commands(message)
+            return
+
+        has_attachments = bool(message.attachments)
+        has_links = ("http://" in message.content) or ("https://" in message.content)
+
+        if not has_attachments and not has_links:
+            await handle_filter_violation(message)
+            return
+
     await bot.process_commands(message)
 
-    ### Приветственные сообщения
-    async def on_member_join(self, member):
-        guild = member.guild
-        if guild.system_channel is not None:
-            to_send = f'Welcome {member.mention} to {guild.name}!'
-            await guild.system_channel.send(to_send)
+
 
 
 # ===================== Команды управления =====================
@@ -167,6 +224,47 @@ async def removeadmin(ctx, role: discord.Role):
     admin_roles_ids.discard(role.id)
 
     await ctx.send(f"✅ Роль {role.name} удалена из списка административных.")
+
+
+@bot.command(help="Добавляет канал в список фильтруемых (только медиа)")
+@commands.has_permissions(manage_channels=True)
+async def addfilter(ctx, channel: discord.TextChannel):
+    if channel.id in filter_channel_ids:
+        await ctx.send(f"⚠️ Канал {channel.mention} уже находится в списке.")
+        return
+
+    filter_channel_ids.add(channel.id)
+    update_filter_channels()
+    await ctx.send(f"✅ Канал {channel.mention} добавлен в список фильтруемых.")
+
+@bot.command(help="Удаляет канал из списка фильтруемых")
+@commands.has_permissions(manage_channels=True)
+async def removefilter(ctx, channel: discord.TextChannel):
+    if channel.id not in filter_channel_ids:
+        await ctx.send(f"⚠️ Канал {channel.mention} не найден в списке.")
+        return
+
+    filter_channel_ids.remove(channel.id)
+    update_filter_channels()
+    await ctx.send(f"✅ Канал {channel.mention} удалён из списка фильтруемых.")
+
+@bot.command(help="Показывает список фильтруемых каналов")
+async def listfilters(ctx):
+    if not filter_channel_ids:
+        await ctx.send("📭 Список фильтруемых каналов пуст.")
+        return
+
+    embed = discord.Embed(title="📵 Фильтруемые каналы (только медиа)", color=RMC_EMBED_COLOR)
+    for cid in filter_channel_ids:
+        channel = bot.get_channel(cid)
+        if channel:
+            embed.add_field(name=channel.name, value=channel.mention, inline=False)
+        else:
+            embed.add_field(name="❓ Неизвестный канал", value=f"ID: {cid}", inline=False)
+
+    await ctx.send(embed=embed)
+
+
 
 
 bot.remove_command("help")
