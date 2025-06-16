@@ -27,9 +27,14 @@ def save_settings(data):
 
 settings = load_settings()
 star_channel_ids = set(settings.get("star_channels", []))
+admin_roles_ids = set(settings.get("admin_roles", []))
 
 def update_star_channels():
     settings["star_channels"] = list(star_channel_ids)
+    save_settings(settings)
+
+def update_admin_roles():
+    settings["admin_roles"] = list(admin_roles_ids)
     save_settings(settings)
 
 # ===================== Событие запуска =====================
@@ -37,13 +42,13 @@ def update_star_channels():
 async def on_ready():
     print(f"Бот {bot.user} запущен!")
 
-# ===================== Автоматическая реакция =====================
+# ===================== Ивенты =====================
 @bot.event
 async def on_message(message):
     if message.author.bot:
         return
 
-    # Добавление реакции в star-канале
+    ### Добавление реакции в star-канале ###
     if message.channel.id in star_channel_ids:
         try:
             await message.add_reaction("⭐")
@@ -52,14 +57,14 @@ async def on_message(message):
         except discord.HTTPException as e:
             print(f"Ошибка при добавлении реакции: {e}")
 
-        # Создание ветки
+    ### Создание ветки ###
         first_line = message.content.split('\n')[0]
         thread_name = first_line[:100] if first_line else f"Обсуждение {message.author.display_name}"    
 
         try:
             thread = await message.create_thread(
                 name=thread_name,
-                auto_archive_duration=1440  # 1 день
+                auto_archive_duration=1440
             )
             await thread.send(
                 f"**Обсуждение работы пользователя {message.author.display_name}**\n\n"
@@ -69,12 +74,18 @@ async def on_message(message):
             print(f"Нет прав для создания ветки в канале {message.channel.name}")
         except discord.HTTPException as e:
             print(f"Ошибка при создании ветки: {e}")
-
-    # Обработка команд (если используешь @bot.command)
     await bot.process_commands(message)
+
+    ### Приветственные сообщения
+    async def on_member_join(self, member):
+        guild = member.guild
+        if guild.system_channel is not None:
+            to_send = f'Welcome {member.mention} to {guild.name}!'
+            await guild.system_channel.send(to_send)
 
 
 # ===================== Команды управления =====================
+
 @bot.command(help="Добавляет канал в ⭐-список")
 @commands.has_permissions(manage_channels=True)
 async def addstar(ctx, channel: discord.TextChannel): # Добавляем канал в список звёздочек
@@ -107,6 +118,56 @@ async def liststars(ctx): # Выводим каналы со звёдочкам�
             embed.add_field(name="❓ Неизвестный канал", value=f"ID: {cid}", inline=False)
 
     await ctx.send(embed=embed)
+
+
+@bot.command(help="Добавляет роль в список административных")
+@commands.has_permissions(administrator=True)
+async def addadmin(ctx, role: discord.Role):
+    admin_roles = settings.get("admin_roles", [])
+    if role.id in admin_roles:
+        await ctx.send(f"⚠️ Роль {role.name} уже находится в списке.")
+        return
+
+    admin_roles.append(role.id)
+    settings["admin_roles"] = admin_roles
+    save_settings(settings)
+
+    admin_roles_ids.add(role.id)
+
+    await ctx.send(f"✅ Роль {role.name} добавлена в список административных.")
+
+@bot.command(help="Выводит все административные роли")
+async def listadmins(ctx):
+    if not admin_roles_ids:
+        await ctx.send("📭 Список административных ролей пуст.")
+        return
+
+    embed = discord.Embed(title="💎 Административные роли", color=RMC_EMBED_COLOR)
+    for rid in admin_roles_ids:
+        role = ctx.guild.get_role(rid)
+        if role:
+            embed.add_field(name=role.name, value=role.mention, inline=False)
+        else:
+            embed.add_field(name="❓Неизвестная роль", value=f"ID: {rid}", inline=False)
+
+    await ctx.send(embed=embed)
+
+@bot.command(help="Удаляет роль из списка административных")
+@commands.has_permissions(administrator=True)
+async def removeadmin(ctx, role: discord.Role):
+    admin_roles = settings.get("admin_roles", [])
+    if role.id not in admin_roles:
+        await ctx.send(f"⚠️ Роль {role.name} не найдена в списке административных.")
+        return
+
+    admin_roles.remove(role.id)
+    settings["admin_roles"] = admin_roles
+    save_settings(settings)
+
+    admin_roles_ids.discard(role.id)
+
+    await ctx.send(f"✅ Роль {role.name} удалена из списка административных.")
+
 
 bot.remove_command("help")
 @bot.command(help="Выводит все доступные команды")
