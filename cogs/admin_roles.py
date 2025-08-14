@@ -1,6 +1,7 @@
 import discord
 from discord.ext import commands
-from utils import settings as settings
+from utils import settings_cache as settings
+
 
 
 
