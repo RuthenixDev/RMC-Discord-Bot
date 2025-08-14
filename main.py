@@ -7,8 +7,7 @@ load_dotenv()
 TOKEN = os.getenv("TOKEN")
 
 intents = discord.Intents.all()
-bot = commands.Bot(command_prefix="!rmc ", intents=intents, help_command=None)
-
+bot = commands.Bot(command_prefix="!rmc ", intents=intents)
 
 @bot.event
 async def on_ready():
