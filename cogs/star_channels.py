@@ -10,14 +10,17 @@ class StarChannels(commands.Cog):
         self.bot = bot
 
     def update_star_channels(self, new_ids):
-        data = settings.get()
+        """Обновляет список ⭐-каналов в настройках."""
+        data = settings.load_settings()
         data["star_channels"] = list(new_ids)
-        settings.save()
+        settings.save_settings(data)
 
     @commands.command(help="Добавляет канал в ⭐-список")
     @commands.has_permissions(manage_channels=True)
     async def addstar(self, ctx, channel: discord.TextChannel):
-        data = settings.get()
+        print("Команда addstar вызвана")
+
+        data = settings.load_settings()
         star_channel_ids = set(data.get("star_channels", []))
 
         if channel.id in star_channel_ids:
@@ -31,7 +34,7 @@ class StarChannels(commands.Cog):
     @commands.command(help="Удаляет канал из ⭐-списка")
     @commands.has_permissions(manage_channels=True)
     async def removestar(self, ctx, channel: discord.TextChannel):
-        data = settings.get()
+        data = settings.load_settings()
         star_channel_ids = set(data.get("star_channels", []))
 
         if channel.id not in star_channel_ids:
@@ -44,7 +47,7 @@ class StarChannels(commands.Cog):
 
     @commands.command(help="Показывает все каналы в ⭐-списке")
     async def liststars(self, ctx):
-        data = settings.get()
+        data = settings.load_settings()
         star_channel_ids = set(data.get("star_channels", []))
 
         if not star_channel_ids:
@@ -67,7 +70,7 @@ class StarChannels(commands.Cog):
         if message.author.bot:
             return
 
-        data = settings.get()
+        data = settings.load_settings()
         star_channel_ids = set(data.get("star_channels", []))
 
         if message.channel.id not in star_channel_ids:
@@ -76,9 +79,7 @@ class StarChannels(commands.Cog):
         # Реакция ⭐
         try:
             await message.add_reaction("⭐")
-        except discord.Forbidden:
-            pass
-        except discord.HTTPException:
+        except (discord.Forbidden, discord.HTTPException):
             pass
 
         # Создание ветки

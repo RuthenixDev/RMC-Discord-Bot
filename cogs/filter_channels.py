@@ -1,57 +1,65 @@
 import discord
 from discord.ext import commands
 from utils import settings_cache as settings
+import time
+from constants import RMC_EMBED_COLOR
 
+COOLDOWN = 600
 
 class FilterChannels(commands.Cog):
-    """Cog для управления каналами с фильтрацией сообщений."""
-
     def __init__(self, bot: commands.Bot):
         self.bot = bot
 
     def update_filter_channels(self, new_ids):
-        data = settings.get()
-        data["filter_channels"] = list(new_ids)
-        settings.save()
+        data = settings.load_settings()
 
-    @commands.command(help="Добавляет канал в список фильтрации")
+        data["filter_channels"] = list(new_ids)
+        settings.save_settings(data)
+
+    def update_filter_timeouts(self, filter_timeouts):
+            data = settings.load_settings()
+
+            data["filter_timeout"] = filter_timeouts
+            settings.save_settings(data)
+
+
+    @commands.command(help="Добавляет канал в список фильтруемых (только медиа)")
     @commands.has_permissions(manage_channels=True)
     async def addfilter(self, ctx, channel: discord.TextChannel):
-        data = settings.get()
-        filter_channel_ids = set(data.get("filter_channels", []))
+        data = settings.load_settings()
+        filter_channel_ids: set[int] = set(data.get("filter_channels", []))
 
         if channel.id in filter_channel_ids:
-            await ctx.send(f"⚠️ Канал {channel.mention} уже в списке фильтрации.")
+            await ctx.send(f"⚠️ Канал {channel.mention} уже в списке.")
             return
-
+        
         filter_channel_ids.add(channel.id)
         self.update_filter_channels(filter_channel_ids)
-        await ctx.send(f"✅ Канал {channel.mention} добавлен в список фильтрации.")
+        await ctx.send(f"✅ Канал {channel.mention} добавлен в список фильтруемых.")
 
-    @commands.command(help="Удаляет канал из списка фильтрации")
+    @commands.command(help="Удаляет канал из списка фильтруемых")
     @commands.has_permissions(manage_channels=True)
     async def removefilter(self, ctx, channel: discord.TextChannel):
-        data = settings.get()
-        filter_channel_ids = set(data.get("filter_channels", []))
+        data = settings.load_settings()
+        filter_channel_ids: set[int] = set(data.get("filter_channels", []))
 
         if channel.id not in filter_channel_ids:
-            await ctx.send(f"⚠️ Канал {channel.mention} не найден в списке фильтрации.")
+            await ctx.send(f"⚠️ Канал {channel.mention} не найден.")
             return
-
         filter_channel_ids.remove(channel.id)
         self.update_filter_channels(filter_channel_ids)
-        await ctx.send(f"❌ Канал {channel.mention} удалён из списка фильтрации.")
+        await ctx.send(f"✅ Канал {channel.mention} удалён из списка фильтруемых.")
 
-    @commands.command(help="Показывает все каналы в списке фильтрации")
+    @commands.command(help="Показывает список фильтруемых каналов")
     async def listfilters(self, ctx):
-        data = settings.get()
-        filter_channel_ids = set(data.get("filter_channels", []))
+        data = settings.load_settings()
+        filter_channel_ids: set[int] = set(data.get("filter_channels", []))
 
         if not filter_channel_ids:
-            await ctx.send("📭 Список каналов для фильтрации пуст.")
+            await ctx.send("📭 Список фильтруемых каналов пуст.")
             return
 
-        embed = discord.Embed(title="🛡️ Каналы с фильтрацией", color=discord.Color.purple())
+        embed = discord.Embed(title="📵 Фильтруемые каналы", color=0x00ccff)
         for cid in filter_channel_ids:
             channel = self.bot.get_channel(cid)
             if channel:
@@ -63,29 +71,48 @@ class FilterChannels(commands.Cog):
 
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message):
-        """Пример фильтрации сообщений."""
         if message.author.bot:
             return
 
-        data = settings.get()
-        filter_channel_ids = set(data.get("filter_channels", []))
+        data = settings.load_settings()
+        filter_channel_ids: set[int] = set(data.get("filter_channels", []))
+
+        user_id_str = str(message.author.id)
+        now = int(time.time())
+        filter_timeouts = data.get("filter_timeouts", {})  # ✅ словарь
+
+        last_violation = filter_timeouts.get(user_id_str, 0)
+
+        has_attachments = bool(message.attachments)
+        has_links = ("http://" in message.content) or ("https://" in message.content)
 
         if message.channel.id not in filter_channel_ids:
             return
 
-        # Здесь можно вставить свою логику фильтрации
-        if "запрещенное слово" in message.content.lower():
+        if not has_attachments and not has_links:
             try:
                 await message.delete()
-                await message.channel.send(
-                    f"⚠️ {message.author.mention}, ваше сообщение было удалено из-за запрещённого содержания.",
-                    delete_after=5
-                )
+                print(f"Удалено сообщение от {message.author} в {message.channel.name} без вложений и ссылок")
+
+                if now - last_violation >= COOLDOWN:
+                    filter_timeouts[user_id_str] = now
+                    self.update_filter_timeouts(filter_timeouts)
+
+                    embed = discord.Embed(
+                        title="📵 Только медиа-сообщения!",
+                        description="Этот канал предназначен **только для изображений, видео или ссылок**.\n\n"
+                                    "Пожалуйста, не отправляй обычные текстовые сообщения без вложений.",
+                        color=RMC_EMBED_COLOR
+                    )
+                    try:
+                        await message.author.send(embed=embed)
+                    except discord.Forbidden:
+                        print(f"Не удалось отправить ЛС пользователю {message.author}")
             except discord.Forbidden:
                 print(f"Нет прав удалять сообщения в {message.channel.name}")
             except discord.HTTPException as e:
                 print(f"Ошибка при удалении сообщения: {e}")
 
 
-async def setup(bot: commands.Bot):
+async def setup(bot):
     await bot.add_cog(FilterChannels(bot))

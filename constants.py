@@ -1,0 +1,1 @@
+RMC_EMBED_COLOR = 0x00ccff

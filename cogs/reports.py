@@ -2,25 +2,30 @@ import discord
 from discord.ext import commands
 from discord import app_commands
 from utils import settings_cache as settings
+import sys
+import os
+
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 
 class Reports(commands.Cog):
-    """Cog для работы с репортами (только текстовые команды + отправка репортов)."""
 
     def __init__(self, bot: commands.Bot):
         self.bot = bot
 
     # ====== Работа с настройками ======
     def update_report_channels(self, new_ids):
-        data = settings.get()
+        data = settings.load_settings()
+
         data["report_channels"] = list(new_ids)
-        settings.save()
+        settings.save_settings(data)
 
     # ====== Управление каналами для репортов ======
     @commands.command(help="Добавляет канал для репортов")
     @commands.has_permissions(manage_channels=True)
     async def addreport(self, ctx, channel: discord.TextChannel):
-        data = settings.get()
+        data = settings.load_settings()
+
         report_channel_ids = set(data.get("report_channels", []))
 
         if channel.id in report_channel_ids:
@@ -34,7 +39,8 @@ class Reports(commands.Cog):
     @commands.command(help="Удаляет канал из репортов")
     @commands.has_permissions(manage_channels=True)
     async def removereport(self, ctx, channel: discord.TextChannel):
-        data = settings.get()
+        data = settings.load_settings()
+
         report_channel_ids = set(data.get("report_channels", []))
 
         if channel.id not in report_channel_ids:
@@ -47,7 +53,8 @@ class Reports(commands.Cog):
 
     @commands.command(help="Список каналов для репортов")
     async def listreports(self, ctx):
-        data = settings.get()
+        data = settings.load_settings()
+
         report_channel_ids = set(data.get("report_channels", []))
 
         if not report_channel_ids:
@@ -67,7 +74,8 @@ class Reports(commands.Cog):
     async def send_report(self, guild: discord.Guild, reporter: discord.Member,
                           target_message: discord.Message, reason: str):
         """Отправка embed-а с жалобой в репорт-каналы"""
-        data = settings.get()
+        data = settings.load_settings()
+
         report_channel_ids = set(data.get("report_channels", []))
         admin_roles_ids = set(data.get("admin_roles", []))
 

@@ -10,14 +10,16 @@ class AdminSettings(commands.Cog):
         self.bot = bot
 
     def update_admin_roles(self, new_roles):
-        data = settings.get()
+        data = settings.load_settings()
+
         data["admin_roles"] = list(new_roles)
-        settings.save()
+        settings.save_settings(data)
 
     @commands.command(help="Добавляет роль в список административных")
     @commands.has_permissions(administrator=True)
     async def addadmin(self, ctx, role: discord.Role):
-        data = settings.get()
+        data = settings.load_settings()
+
         admin_roles_ids = set(data.get("admin_roles", []))
         if role.id in admin_roles_ids:
             await ctx.send(f"⚠️ Роль {role.name} уже есть в списке.")
@@ -29,7 +31,8 @@ class AdminSettings(commands.Cog):
     @commands.command(help="Удаляет роль из списка административных")
     @commands.has_permissions(administrator=True)
     async def removeadmin(self, ctx, role: discord.Role):
-        data = settings.get()
+        data = settings.load_settings()
+
         admin_roles_ids = set(data.get("admin_roles", []))
         if role.id not in admin_roles_ids:
             await ctx.send(f"⚠️ Роль {role.name} не найдена.")
@@ -40,7 +43,8 @@ class AdminSettings(commands.Cog):
 
     @commands.command(help="Выводит все административные роли")
     async def listadmins(self, ctx):
-        data = settings.get()
+        data = settings.load_settings()
+
         admin_roles_ids = set(data.get("admin_roles", []))
         if not admin_roles_ids:
             await ctx.send("📭 Список административных ролей пуст.")

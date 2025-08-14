@@ -16,15 +16,21 @@ async def on_ready():
     await bot.tree.sync()
     print("Slash-команды синхронизированы.")
 
-async def load_cogs():
-    for filename in os.listdir("./cogs"):
-        if filename.endswith(".py") and filename != "__init__.py":
-            await bot.load_extension(f"cogs.{filename[:-3]}")
-            print(f"Загружен cog: {filename}")
 
 async def main():
     async with bot:
-        await load_cogs()
+
+        import logging
+        logging.basicConfig(level=logging.DEBUG)
+
+
+        for filename in os.listdir('./cogs'):
+            if filename.endswith('.py'):
+                try:
+                    await bot.load_extension(f'cogs.{filename[:-3]}')
+                    print(f"✅ Ког {filename} загружен")
+                except Exception as e:
+                    print(f"❌ Ошибка при загрузке {filename}: {e}")
         await bot.start(TOKEN)
 
 if __name__ == "__main__":
