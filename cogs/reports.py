@@ -13,6 +13,17 @@ class Reports(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
 
+    async def cog_check(self, ctx: commands.Context):
+        data = settings.load_settings()
+        admin_roles = data.get("admin_roles", [])
+
+        if ctx.author.guild_permissions.administrator:
+            return True
+        if any(str(role.id) in admin_roles for role in ctx.author.roles):
+            return True
+
+        raise commands.CheckFailure("❌ У вас нет прав для этого раздела команд. Если вы считаете это ошибкой, свяжитесь с администратором.")
+
     # ====== Работа с настройками ======
     def update_report_channels(self, new_ids):
         data = settings.load_settings()
@@ -21,7 +32,11 @@ class Reports(commands.Cog):
         settings.save_settings(data)
 
     # ====== Управление каналами для репортов ======
-    @commands.command(help="Добавляет канал для репортов")
+    @commands.hybrid_command(
+        name="addreport",
+        with_app_command=True,  # регистрирует как slash
+        description="Добавляет канал в список каналов, куда отправляются репорты"
+    )
     @commands.has_permissions(manage_channels=True)
     async def addreport(self, ctx, channel: discord.TextChannel):
         data = settings.load_settings()
@@ -36,7 +51,11 @@ class Reports(commands.Cog):
         self.update_report_channels(report_channel_ids)
         await ctx.send(f"✅ Канал {channel.mention} добавлен для репортов.")
 
-    @commands.command(help="Удаляет канал из репортов")
+    @commands.hybrid_command(
+        name="removereport",
+        with_app_command=True,  # регистрирует как slash
+        description="Удаляет канал из списка каналов, куда отправляются репорты"
+    )
     @commands.has_permissions(manage_channels=True)
     async def removereport(self, ctx, channel: discord.TextChannel):
         data = settings.load_settings()
@@ -51,7 +70,11 @@ class Reports(commands.Cog):
         self.update_report_channels(report_channel_ids)
         await ctx.send(f"❌ Канал {channel.mention} удалён из репортов.")
 
-    @commands.command(help="Список каналов для репортов")
+    @commands.hybrid_command(
+        name="listreports",
+        with_app_command=True,  # регистрирует как slash
+        description="Список репорт-каналов"
+    )
     async def listreports(self, ctx):
         data = settings.load_settings()
 

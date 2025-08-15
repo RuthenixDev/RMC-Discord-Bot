@@ -13,7 +13,7 @@ class AdminUtils(commands.Cog):
     @commands.command(help="🔄 Перезагружает настройки из settings.json в кэш")
     @commands.has_permissions(administrator=True)
     async def updatesettings(self, ctx):
-        settings.reload()
+        settings.reload_settings()
         await ctx.send("✅ Настройки перезагружены из файла и обновлены в кэше.")
 
 
