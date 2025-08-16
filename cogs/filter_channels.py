@@ -10,6 +10,17 @@ class FilterChannels(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
 
+    async def cog_check(self, ctx: commands.Context):
+        data = settings.load_settings()
+        admin_roles = data.get("admin_roles", [])
+
+        if ctx.author.guild_permissions.administrator:
+            return True
+        if any(str(role.id) in admin_roles for role in ctx.author.roles):
+            return True
+
+        raise commands.CheckFailure("❌ У вас нет прав для этого раздела команд. Если вы считаете это ошибкой, свяжитесь с администратором.")
+
     def update_filter_channels(self, new_ids):
         data = settings.load_settings()
 
@@ -23,9 +34,15 @@ class FilterChannels(commands.Cog):
             settings.save_settings(data)
 
 
-    @commands.command(help="Добавляет канал в список фильтруемых (только медиа)")
-    @commands.has_permissions(manage_channels=True)
-    async def addfilter(self, ctx, channel: discord.TextChannel):
+    @commands.hybrid_command(
+        name="addfilter",
+        with_app_command=True,
+        description="Добавляет канал в список онли-медиа каналов"
+    )
+    async def addfilter(self, ctx, channel: discord.TextChannel = None):
+        if channel is None:
+            channel = ctx.channel
+
         data = settings.load_settings()
         filter_channel_ids: set[int] = set(data.get("filter_channels", []))
 
@@ -37,9 +54,15 @@ class FilterChannels(commands.Cog):
         self.update_filter_channels(filter_channel_ids)
         await ctx.send(f"✅ Канал {channel.mention} добавлен в список фильтруемых.")
 
-    @commands.command(help="Удаляет канал из списка фильтруемых")
-    @commands.has_permissions(manage_channels=True)
-    async def removefilter(self, ctx, channel: discord.TextChannel):
+    @commands.hybrid_command(
+        name="removefilter",
+        with_app_command=True,
+        description="Удаляет канал из списка онли-медиа каналов"
+    )
+    async def removefilter(self, ctx, channel: discord.TextChannel = None):
+        if channel is None:
+            channel = ctx.channel
+            
         data = settings.load_settings()
         filter_channel_ids: set[int] = set(data.get("filter_channels", []))
 
@@ -50,7 +73,11 @@ class FilterChannels(commands.Cog):
         self.update_filter_channels(filter_channel_ids)
         await ctx.send(f"✅ Канал {channel.mention} удалён из списка фильтруемых.")
 
-    @commands.command(help="Показывает список фильтруемых каналов")
+    @commands.hybrid_command(
+        name="listfilters",
+        with_app_command=True,
+        description="Показывает список онли-медиа каналов"
+    )
     async def listfilters(self, ctx):
         data = settings.load_settings()
         filter_channel_ids: set[int] = set(data.get("filter_channels", []))
@@ -79,7 +106,7 @@ class FilterChannels(commands.Cog):
 
         user_id_str = str(message.author.id)
         now = int(time.time())
-        filter_timeouts = data.get("filter_timeouts", {})  # ✅ словарь
+        filter_timeouts = data.get("filter_timeouts", {})
 
         last_violation = filter_timeouts.get(user_id_str, 0)
 

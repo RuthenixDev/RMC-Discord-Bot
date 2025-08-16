@@ -22,7 +22,7 @@ class Reports(commands.Cog):
         if any(str(role.id) in admin_roles for role in ctx.author.roles):
             return True
 
-        raise commands.CheckFailure("❌ У вас нет прав для этого раздела команд. Если вы считаете это ошибкой, свяжитесь с администратором.")
+        raise commands.CheckFailure()
 
     # ====== Работа с настройками ======
     def update_report_channels(self, new_ids):
@@ -38,7 +38,9 @@ class Reports(commands.Cog):
         description="Добавляет канал в список каналов, куда отправляются репорты"
     )
     @commands.has_permissions(manage_channels=True)
-    async def addreport(self, ctx, channel: discord.TextChannel):
+    async def addreport(self, ctx, channel: discord.TextChannel = None):
+        if channel is None:
+            channel = ctx.channel
         data = settings.load_settings()
 
         report_channel_ids = set(data.get("report_channels", []))
@@ -57,7 +59,10 @@ class Reports(commands.Cog):
         description="Удаляет канал из списка каналов, куда отправляются репорты"
     )
     @commands.has_permissions(manage_channels=True)
-    async def removereport(self, ctx, channel: discord.TextChannel):
+    async def removereport(self, ctx, channel: discord.TextChannel = None):
+        if channel is None:
+            channel = ctx.channel
+
         data = settings.load_settings()
 
         report_channel_ids = set(data.get("report_channels", []))

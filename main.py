@@ -48,6 +48,22 @@ async def load_cogs():
                 bot.last_critical_error = tb
                 print(f"⚠ Ошибка при загрузке {cog_name}:\n{tb}")
 
+@commands.Cog.listener()
+async def on_command_error(self, ctx: commands.Context, error):
+    if isinstance(error, commands.CheckFailure):
+        # Если команда была slash
+        if hasattr(ctx, "interaction") and ctx.interaction:
+            await ctx.interaction.response.send_message(
+                "❌ У вас нет прав для этой команды.",
+                ephemeral=True
+            )
+        else:
+            await ctx.send("❌ У вас нет прав для этой команды.")
+        return
+
+    raise error
+
+
 @bot.event
 async def on_error(event, *args, **kwargs):
     bot.last_critical_error = traceback.format_exc()

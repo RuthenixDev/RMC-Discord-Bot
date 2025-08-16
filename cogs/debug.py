@@ -1,10 +1,22 @@
 from discord.ext import commands
 import discord
 import time
+from utils import settings_cache as settings
 
 class Debug(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
+
+    async def cog_check(self, ctx: commands.Context):
+        data = settings.load_settings()
+        admin_roles = data.get("admin_roles", [])
+
+        if ctx.author.guild_permissions.administrator:
+            return True
+        if any(str(role.id) in admin_roles for role in ctx.author.roles):
+            return True
+
+        raise commands.CheckFailure("❌ У вас нет прав для этого раздела команд. Если вы считаете это ошибкой, свяжитесь с администратором.")
 
     @commands.hybrid_command(name="ping", with_app_command=True, description="Проверка бота и вывод ошибок")
     async def ping(self, ctx: commands.Context):

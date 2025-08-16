@@ -9,14 +9,29 @@ class AdminSettings(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
 
+    async def cog_check(self, ctx: commands.Context):
+        data = settings.load_settings()
+        admin_roles = data.get("admin_roles", [])
+
+        if ctx.author.guild_permissions.administrator:
+            return True 
+        if any(str(role.id) in admin_roles for role in ctx.author.roles):
+            return True
+
+        raise commands.CheckFailure("❌ У вас нет прав для этого раздела команд. Если вы считаете это ошибкой, свяжитесь с администратором.")
+
+
     def update_admin_roles(self, new_roles):
         data = settings.load_settings()
 
         data["admin_roles"] = list(new_roles)
         settings.save_settings(data)
 
-    @commands.command(help="Добавляет роль в список административных")
-    @commands.has_permissions(administrator=True)
+    @commands.hybrid_command(
+        name="addadmin",
+        with_app_command=True,
+        description="Добавляет роль в список административных"
+    )
     async def addadmin(self, ctx, role: discord.Role):
         data = settings.load_settings()
 
@@ -28,8 +43,11 @@ class AdminSettings(commands.Cog):
         self.update_admin_roles(admin_roles_ids)
         await ctx.send(f"✅ Роль {role.name} добавлена в список административных.")
 
-    @commands.command(help="Удаляет роль из списка административных")
-    @commands.has_permissions(administrator=True)
+    @commands.hybrid_command(
+        name="removeadmin",
+        with_app_command=True,
+        description="Удаляет роль из списка административных"
+    )
     async def removeadmin(self, ctx, role: discord.Role):
         data = settings.load_settings()
 
@@ -41,7 +59,11 @@ class AdminSettings(commands.Cog):
         self.update_admin_roles(admin_roles_ids)
         await ctx.send(f"✅ Роль {role.name} удалена из списка административных.")
 
-    @commands.command(help="Выводит все административные роли")
+    @commands.hybrid_command(
+        name="listadmins",
+        with_app_command=True,
+        description="Показывает все административные роли"
+    )
     async def listadmins(self, ctx):
         data = settings.load_settings()
 

@@ -9,16 +9,32 @@ class StarChannels(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
 
+    async def cog_check(self, ctx: commands.Context):
+        data = settings.load_settings()
+        admin_roles = data.get("admin_roles", [])
+
+        if ctx.author.guild_permissions.administrator:
+            return True
+        if any(str(role.id) in admin_roles for role in ctx.author.roles):
+            return True
+
+        raise commands.CheckFailure()
+        
+
     def update_star_channels(self, new_ids):
-        """Обновляет список ⭐-каналов в настройках."""
+        """Обновляет список ⭐-каналов в settings.json."""
         data = settings.load_settings()
         data["star_channels"] = list(new_ids)
         settings.save_settings(data)
 
-    @commands.command(help="Добавляет канал в ⭐-список")
-    @commands.has_permissions(manage_channels=True)
-    async def addstar(self, ctx, channel: discord.TextChannel):
-        print("Команда addstar вызвана")
+    @commands.hybrid_command(
+        name="addstar",
+        with_app_command=True,
+        description="Добавляет канал в ⭐-список"
+    )
+    async def addstar(self, ctx, channel: discord.TextChannel = None):
+        if channel is None:
+            channel = ctx.channel
 
         data = settings.load_settings()
         star_channel_ids = set(data.get("star_channels", []))
@@ -31,9 +47,15 @@ class StarChannels(commands.Cog):
         self.update_star_channels(star_channel_ids)
         await ctx.send(f"✅ Канал {channel.mention} добавлен в ⭐-список.")
 
-    @commands.command(help="Удаляет канал из ⭐-списка")
-    @commands.has_permissions(manage_channels=True)
-    async def removestar(self, ctx, channel: discord.TextChannel):
+    @commands.hybrid_command(
+        name="removestar",
+        with_app_command=True,
+        description="Удаляет канал из ⭐-списка"
+    )
+    async def removestar(self, ctx, channel: discord.TextChannel = None):
+        if channel is None:
+            channel = ctx.channel
+
         data = settings.load_settings()
         star_channel_ids = set(data.get("star_channels", []))
 
@@ -45,7 +67,11 @@ class StarChannels(commands.Cog):
         self.update_star_channels(star_channel_ids)
         await ctx.send(f"❌ Канал {channel.mention} удалён из ⭐-списка.")
 
-    @commands.command(help="Показывает все каналы в ⭐-списке")
+    @commands.hybrid_command(
+        name="liststars",
+        with_app_command=True,
+        description="Показывает все каналы в ⭐-списке"
+    )
     async def liststars(self, ctx):
         data = settings.load_settings()
         star_channel_ids = set(data.get("star_channels", []))
@@ -84,12 +110,12 @@ class StarChannels(commands.Cog):
 
         # Создание ветки
         first_line = message.content.split('\n')[0]
-        thread_name = first_line[:100] if first_line else f"Обсуждение {message.author.display_name}"
+        thread_name =  f"Обсуждение {message.author.display_name}"
 
         try:
             thread = await message.create_thread(
                 name=thread_name,
-                auto_archive_duration=1440  # 1 день
+                auto_archive_duration=4320  # 1 день = 1440, считается в минутах
             )
             await thread.send(
                 f"**Обсуждение работы пользователя {message.author.display_name}**\n\n"
