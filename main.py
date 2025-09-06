@@ -7,7 +7,12 @@ load_dotenv()
 TOKEN = os.getenv("TOKEN")
 COGS_DIR = "cogs"
 
+print("🚀 Старт main.py")
+
+
+print("🔄 Запуск healthcheck...")
 healthcheck.start_in_background()
+print("✅ Healthcheck инициализирован")
 
 
 
@@ -39,6 +44,7 @@ async def on_ready():
 
 
 async def load_cogs():
+    print("🔄 Загрузка когов...")
     for filename in os.listdir(COGS_DIR):
         if filename.endswith(".py"):
             cog_name = f"{COGS_DIR}.{filename[:-3]}"
@@ -76,6 +82,7 @@ async def on_error(event, *args, **kwargs):
 async def main():
     async with bot:
         await load_cogs()
+        print("🔑 Запуск авторизации Discord...")
         await bot.start(TOKEN)
 
 if __name__ == "__main__":
