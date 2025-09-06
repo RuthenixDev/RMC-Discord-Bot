@@ -5,6 +5,7 @@ import healthcheck
 
 load_dotenv()
 TOKEN = os.getenv("TOKEN")
+print(f"TOKEN найден: {bool(TOKEN)}")
 COGS_DIR = "cogs"
 
 print("🚀 Старт main.py")
@@ -58,9 +59,9 @@ async def load_cogs():
                 print(f"⚠ Ошибка при загрузке {cog_name}:\n{tb}")
 
 @commands.Cog.listener()
-async def on_command_error(self, ctx: commands.Context, error):
+@bot.event
+async def on_command_error(ctx, error):
     if isinstance(error, commands.CheckFailure):
-        # Если команда была slash
         if hasattr(ctx, "interaction") and ctx.interaction:
             await ctx.interaction.response.send_message(
                 "❌ У вас нет прав для этой команды.",
@@ -71,6 +72,7 @@ async def on_command_error(self, ctx: commands.Context, error):
         return
 
     raise error
+
 
 
 @bot.event
