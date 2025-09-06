@@ -94,7 +94,6 @@ class Starboard(commands.Cog):
         embed.set_footer(text=f"ID: {message.id}")
 
         await starboard_channel.send(
-            f"{self.star_emoji} **{star_count}** {self.star_emoji}",
             embed=embed
         )
 
