@@ -1,10 +1,13 @@
 import discord, os, traceback
 from discord.ext import commands
 from dotenv import load_dotenv
+import healthcheck
 
 load_dotenv()
 TOKEN = os.getenv("TOKEN")
 COGS_DIR = "cogs"
+
+healthcheck.start_in_background()
 
 
 
