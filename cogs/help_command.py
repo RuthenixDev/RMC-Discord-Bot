@@ -1,6 +1,7 @@
 import discord
 from discord.ext import commands
 from utils import settings_cache as settings
+from constants import RMC_EMBED_COLOR
 
 
 class HelpCmd(commands.Cog):
@@ -24,7 +25,7 @@ class HelpCmd(commands.Cog):
         description="Показывает список команд"
     )
     async def help(self, ctx):
-        embed = discord.Embed(title="🛠️ Список доступных команд", color=0x00ccff)
+        embed = discord.Embed(title="🛠️ Список доступных команд", color=RMC_EMBED_COLOR)
         for command in self.bot.commands:
             if command.hidden:
                 continue

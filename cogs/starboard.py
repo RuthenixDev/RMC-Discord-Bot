@@ -104,12 +104,24 @@ class Starboard(commands.Cog):
     @commands.hybrid_command(name="setthreshold", description="Задать количество звёзд для попадания в starboard")
     async def set_star_threshold(self, ctx: commands.Context, number: int):
         self.update_star_threshold(number)
-        await ctx.reply(f"✅ Порог для звёзд обновлён: теперь нужно **{number}** {self.star_emoji}")
+        embed = discord.Embed(
+            description=f"✅ Порог для звёзд обновлён: теперь нужно **{number}** {self.star_emoji}",
+            color=discord.Color.green()
+        )
+        await ctx.reply(
+            embed=embed
+        )
 
     @commands.hybrid_command(name="setstarboard", description="Задать канал для starboard")
     async def set_star_channel(self, ctx: commands.Context, channel: discord.TextChannel):
         self.update_star_channel(channel.id)
-        await ctx.reply(f"✅ Starboard будет использовать канал {channel.mention}")
+        embed = discord.Embed(
+            description=f"✅ Starboard будет использовать канал {channel.mention}",
+            color=discord.Color.green()
+        )
+        await ctx.reply(
+            embed=embed
+        )
 
 
 async def setup(bot):

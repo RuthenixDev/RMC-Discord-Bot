@@ -4,6 +4,7 @@ from discord import app_commands
 from utils import settings_cache as settings
 import sys
 import os
+from constants import RMC_EMBED_COLOR
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -46,12 +47,24 @@ class Reports(commands.Cog):
         report_channel_ids = set(data.get("report_channels", []))
 
         if channel.id in report_channel_ids:
-            await ctx.send(f"⚠️ Канал {channel.mention} уже в списке репортов.")
+            embed = discord.Embed(
+                description=f"⚠️ Канал {channel.mention} уже в списке репортов.",
+                color=discord.Color.dark_gray()
+            )
+            await ctx.reply(
+                embed=embed
+            )
             return
 
         report_channel_ids.add(channel.id)
         self.update_report_channels(report_channel_ids)
-        await ctx.send(f"✅ Канал {channel.mention} добавлен для репортов.")
+        embed = discord.Embed(
+            description=f"✅ Канал {channel.mention} добавлен для репортов.",
+            color=discord.Color.green()
+        )
+        await ctx.reply(
+            embed=embed
+        )
 
     @commands.hybrid_command(
         name="removereport",
@@ -68,12 +81,24 @@ class Reports(commands.Cog):
         report_channel_ids = set(data.get("report_channels", []))
 
         if channel.id not in report_channel_ids:
-            await ctx.send(f"⚠️ Канал {channel.mention} не найден в репортах.")
+            embed = discord.Embed(
+                description=f"⚠️ Канал {channel.mention} не найден в списке репортов.",
+                color=discord.Color.dark_gray()
+            )
+            await ctx.reply(
+                embed=embed
+            )
             return
 
         report_channel_ids.remove(channel.id)
         self.update_report_channels(report_channel_ids)
-        await ctx.send(f"❌ Канал {channel.mention} удалён из репортов.")
+        embed = discord.Embed(
+            description=f"❌ Канал {channel.mention} удалён из репортов.",
+            color=discord.Color.dark_red()
+        )
+        await ctx.reply(
+            embed=embed
+        )
 
     @commands.hybrid_command(
         name="listreports",
@@ -86,10 +111,16 @@ class Reports(commands.Cog):
         report_channel_ids = set(data.get("report_channels", []))
 
         if not report_channel_ids:
-            await ctx.send("📭 Список каналов для репортов пуст.")
+            embed = discord.Embed(
+                description="📭 Список репорт-каналов пуст.",
+                color=discord.Color.dark_gray()
+            )
+            await ctx.reply(
+                embed=embed
+            )
             return
 
-        embed = discord.Embed(title="🚨 Каналы для репортов", color=discord.Color.red())
+        embed = discord.Embed(title="🚨 Каналы для репортов", color=discord.Color.RMC_EMBED_COLOR)
         for cid in report_channel_ids:
             channel = self.bot.get_channel(cid)
             if channel:

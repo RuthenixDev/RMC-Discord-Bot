@@ -28,7 +28,13 @@ class AdminUtils(commands.Cog):
     )
     async def updatesettings(self, ctx):
         settings.reload_settings()
-        await ctx.send("✅ Настройки перезагружены из файла и обновлены в кэше.")
+        embed = discord.Embed(
+            description="✅ Настройки перезагружены из файла и обновлены в кэше.",
+            color=discord.Color.green()
+        )
+        await ctx.reply(
+            embed=embed
+        )
 
 
 async def setup(bot):

@@ -47,12 +47,24 @@ class FilterChannels(commands.Cog):
         filter_channel_ids: set[int] = set(data.get("filter_channels", []))
 
         if channel.id in filter_channel_ids:
-            await ctx.send(f"⚠️ Канал {channel.mention} уже в списке.")
+            embed = discord.Embed(
+                description=f"⚠️ Канал {channel.mention} уже в списке фильтруемых.",
+                color=discord.Color.dark_gray()
+            )
+            await ctx.reply(
+                embed=embed
+            )
             return
         
         filter_channel_ids.add(channel.id)
         self.update_filter_channels(filter_channel_ids)
-        await ctx.send(f"✅ Канал {channel.mention} добавлен в список фильтруемых.")
+        embed = discord.Embed(
+            description=f"✅ Канал {channel.mention} добавлен в список фильтруемых.",
+            color=discord.Color.green()
+        )
+        await ctx.reply(
+            embed=embed
+        )
 
     @commands.hybrid_command(
         name="removefilter",
@@ -67,11 +79,23 @@ class FilterChannels(commands.Cog):
         filter_channel_ids: set[int] = set(data.get("filter_channels", []))
 
         if channel.id not in filter_channel_ids:
-            await ctx.send(f"⚠️ Канал {channel.mention} не найден.")
+            embed = discord.Embed(
+                description=f"⚠️ Канал {channel.mention} не найден в списке фильтруемых.",
+                color=discord.Color.dark_gray()
+            )
+            await ctx.reply(
+                embed=embed
+            )
             return
         filter_channel_ids.remove(channel.id)
         self.update_filter_channels(filter_channel_ids)
-        await ctx.send(f"✅ Канал {channel.mention} удалён из списка фильтруемых.")
+        embed = discord.Embed(
+            description=f"❌ Канал {channel.mention} удалён из списка фильтруемых.",
+            color=discord.Color.dark_red()
+        )
+        await ctx.reply(
+            embed=embed
+        )
 
     @commands.hybrid_command(
         name="listfilters",
@@ -83,10 +107,16 @@ class FilterChannels(commands.Cog):
         filter_channel_ids: set[int] = set(data.get("filter_channels", []))
 
         if not filter_channel_ids:
-            await ctx.send("📭 Список фильтруемых каналов пуст.")
+            embed = discord.Embed(
+                description="📭 Список фильтруемых каналов пуст.",
+                color=discord.Color.dark_gray()
+            )
+            await ctx.reply(
+                embed=embed
+            )
             return
 
-        embed = discord.Embed(title="📵 Фильтруемые каналы", color=0x00ccff)
+        embed = discord.Embed(title="📵 Фильтруемые каналы", color=RMC_EMBED_COLOR)
         for cid in filter_channel_ids:
             channel = self.bot.get_channel(cid)
             if channel:

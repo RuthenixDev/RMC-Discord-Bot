@@ -1,6 +1,7 @@
 import discord
 from discord.ext import commands
 from utils import settings_cache as settings
+from constants import RMC_EMBED_COLOR
 
 
 
@@ -37,11 +38,23 @@ class AdminSettings(commands.Cog):
 
         admin_roles_ids = set(data.get("admin_roles", []))
         if role.id in admin_roles_ids:
-            await ctx.send(f"⚠️ Роль {role.name} уже есть в списке.")
+            embed = discord.Embed(
+                description=f"⚠️ Роль {role.name} уже администратор.",
+                color=discord.Color.dark_gray()
+            )
+            await ctx.reply(
+                embed=embed
+            )
             return
         admin_roles_ids.add(role.id)
         self.update_admin_roles(admin_roles_ids)
-        await ctx.send(f"✅ Роль {role.name} добавлена в список административных.")
+        embed = discord.Embed(
+            description=f"✅ Роль {role.name} добавлена в администраторов.",
+            color=discord.Color.green()
+        )
+        await ctx.reply(
+            embed=embed
+        )
 
     @commands.hybrid_command(
         name="removeadmin",
@@ -53,11 +66,23 @@ class AdminSettings(commands.Cog):
 
         admin_roles_ids = set(data.get("admin_roles", []))
         if role.id not in admin_roles_ids:
-            await ctx.send(f"⚠️ Роль {role.name} не найдена.")
+            embed = discord.Embed(
+                description=f"⚠️ Роль {role.name} не является администратором.",
+                color=discord.Color.dark_gray()
+            )
+            await ctx.reply(
+                embed=embed
+            )
             return
         admin_roles_ids.remove(role.id)
         self.update_admin_roles(admin_roles_ids)
-        await ctx.send(f"✅ Роль {role.name} удалена из списка административных.")
+        embed = discord.Embed(
+            description=f"✅ Роль {role.name} удалена из администраторов.",
+            color=discord.Color.dark_red()
+        )
+        await ctx.reply(
+            embed=embed
+        )
 
     @commands.hybrid_command(
         name="listadmins",
@@ -69,9 +94,15 @@ class AdminSettings(commands.Cog):
 
         admin_roles_ids = set(data.get("admin_roles", []))
         if not admin_roles_ids:
-            await ctx.send("📭 Список административных ролей пуст.")
+            embed = discord.Embed(
+                description="📭 Список административных ролей пуст.",
+                color=discord.Color.dark_gray()
+            )
+            await ctx.reply(
+                embed=embed
+            )
             return
-        embed = discord.Embed(title="💎 Административные роли", color=0x00ccff)
+        embed = discord.Embed(title="💎 Административные роли", color=RMC_EMBED_COLOR)
         for rid in admin_roles_ids:
             role = ctx.guild.get_role(rid)
             embed.add_field(name=role.name if role else "❓ Неизвестная роль",
