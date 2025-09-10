@@ -111,7 +111,7 @@ class StarChannels(commands.Cog):
             )
             return
 
-        embed = discord.Embed(title="⭐ Каналы со звёздной реакцией", color=discord.Color.RMC_EMBED_COLOR)
+        embed = discord.Embed(title="⭐ Каналы со звёздной реакцией", color=RMC_EMBED_COLOR)
         for cid in star_channel_ids:
             channel = self.bot.get_channel(cid)
             if channel:

@@ -120,7 +120,7 @@ class Reports(commands.Cog):
             )
             return
 
-        embed = discord.Embed(title="🚨 Каналы для репортов", color=discord.Color.RMC_EMBED_COLOR)
+        embed = discord.Embed(title="🚨 Каналы для репортов", color=RMC_EMBED_COLOR)
         for cid in report_channel_ids:
             channel = self.bot.get_channel(cid)
             if channel:
