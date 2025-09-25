@@ -104,21 +104,17 @@ class Wiki(commands.Cog):
         """Автодополнение для поиска статей"""
         choices = []
         
-        # Всегда добавляем справку
         if not current or "help".startswith(current.lower()):
             choices.append(app_commands.Choice(name="📚 Полный список статей", value="help"))
         
-        # Добавляем статьи из словаря с фильтрацией
         for key in self.wiki_map.keys():
             display_name = key.replace('_', ' ').title()
             
-            # Фильтруем по введенному тексту
-            if (not current or  # если пустой запрос - показываем популярные
+            if (not current or  
                 current.lower() in key.lower() or 
                 current.lower() in display_name.lower()):
                 
-                # Ограничиваем количество результатов
-                if len(choices) < 24:  # оставляем место для help
+                if len(choices) < 24:  
                     choices.append(app_commands.Choice(name=display_name, value=key))
                 else:
                     break
