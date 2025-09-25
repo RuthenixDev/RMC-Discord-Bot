@@ -2,7 +2,7 @@ import discord
 from typing import Optional
 from discord import app_commands
 from discord.ext import commands
-from main import RMC_EMBED_COLOR
+from constants import RMC_EMBED_COLOR
 
 class Wiki(commands.Cog):
     """Cog для просмотра страниц Вики"""
