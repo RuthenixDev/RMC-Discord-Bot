@@ -2,7 +2,7 @@ import discord
 from typing import Optional
 from discord import app_commands
 from discord.ext import commands
-from constants import RMC_EMBED_COLOR
+from main import RMC_EMBED_COLOR
 
 class Rules(commands.Cog):
     """Cog для просмотра правил сервера."""
