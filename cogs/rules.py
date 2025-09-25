@@ -2,13 +2,32 @@ import discord
 from typing import Optional
 from discord import app_commands
 from discord.ext import commands
-from constants import RMC_EMBED_COLOR
+from main import RMC_EMBED_COLOR
 
 class Rules(commands.Cog):
     """Cog для просмотра правил сервера."""
 
     def __init__(self, bot: commands.Bot):
         self.bot = bot
+        self.rule_names = {
+            "1": "Краши и фишинговые ссылки",
+            "2": "Реклама", 
+            "3": "NSFW шок-контент",
+            "4": "Оскорбления",
+            "5": "Критика",
+            "6": "Обсуждение политики",
+            "7": "Спам и флуд",
+            "8": "Призывы к насилию",
+            "9": "Акции от имени РМК",
+            "10": "Выдача себя за другое лицо",
+            "11": "Поиск неточностей в правилах",
+            "12": "О других аккаунтах участника",
+            "13": "О критике администрации",
+            "14": "О личных сообщениях администрации",
+            "15": "О действиях администрации",
+            "basis": "Право администрации на самостоятельное принятие решений",
+            "link": "Ссылка на полные правила"
+        }
 
     @commands.hybrid_command(
         name="rule",
@@ -17,24 +36,24 @@ class Rules(commands.Cog):
     )
     @app_commands.describe(rule_id="Выберите пункт правил")
     @app_commands.choices(rule_id=[
-        app_commands.Choice(name="help", value="help"),
-        app_commands.Choice(name="1", value="1"),
-        app_commands.Choice(name="2", value="2"),
-        app_commands.Choice(name="3", value="3"),
-        app_commands.Choice(name="4", value="4"),
-        app_commands.Choice(name="5", value="5"),
-        app_commands.Choice(name="6", value="6"),
-        app_commands.Choice(name="7", value="7"),
-        app_commands.Choice(name="8", value="8"),
-        app_commands.Choice(name="9", value="9"),
-        app_commands.Choice(name="10", value="10"),
-        app_commands.Choice(name="11", value="11"),
-        app_commands.Choice(name="12", value="12"),
-        app_commands.Choice(name="13", value="13"),
-        app_commands.Choice(name="14", value="14"),
-        app_commands.Choice(name="15", value="15"),
-        app_commands.Choice(name="basis", value="basis"),
-        app_commands.Choice(name="link", value="link")
+        app_commands.Choice(name="Справка о команде", value="help"),
+        app_commands.Choice(name="Краши и фишинговые ссылки", value="1"),
+        app_commands.Choice(name="Реклама", value="2"),
+        app_commands.Choice(name="NSFW шок-контент", value="3"),
+        app_commands.Choice(name="Оскорбления", value="4"),
+        app_commands.Choice(name="Критика", value="5"),
+        app_commands.Choice(name="Обсуждение политики", value="6"),
+        app_commands.Choice(name="Спам и флуд", value="7"),
+        app_commands.Choice(name="Призывы к насилию", value="8"),
+        app_commands.Choice(name="Акции от имени РМК", value="9"),
+        app_commands.Choice(name="Выдача себя за другое лицо", value="10"),
+        app_commands.Choice(name="Поиск неточностей в правилах", value="11"),
+        app_commands.Choice(name="О других аккаунтах участника", value="12"),
+        app_commands.Choice(name="О критике администрации", value="13"),
+        app_commands.Choice(name="О личных сообщениях администрации", value="14"),
+        app_commands.Choice(name="О действиях администрации", value="15"),
+        app_commands.Choice(name="Право администрации на самостоятельное принятие решений", value="basis"),
+        app_commands.Choice(name="Ссылка на полные правила", value="link")
     ])
     async def rule(self, ctx: commands.Context, rule_id: Optional[str] = None):
         """Показать пункт правил по номеру или help."""
@@ -61,49 +80,51 @@ class Rules(commands.Cog):
         }
 
         if rule_id is None or rule_id == "help":
-            # Embed для справки
             embed = discord.Embed(
                 title="📖 Справка по команде rule",
                 description="Доступные пункты правил:",
                 color=RMC_EMBED_COLOR
             )
             
-            # Добавляем все доступные пункты
             for i in range(1, 16):
+                rule_key = str(i)
+                rule_name = self.rule_names.get(rule_key, f"Правило {i}")
                 embed.add_field(
-                    name=f"Правило {i}",
+                    name=f"📜 {rule_name}",
                     value=f"Используйте `!rmc rule {i}` или `/rule {i}`",
-                    inline=True
+                    inline=True  
                 )
             
             embed.add_field(
-                name="Основа основ",
+                name="⚖️ " + self.rule_names.get("basis", "Основа основ"),
                 value="`!rmc rule basis` или `/rule basis`",
-                inline=False
+                inline=True
             )
             
             embed.add_field(
-                name="Ссылка на правила",
+                name="🔗 " + self.rule_names.get("link", "Ссылка на правила"),
                 value="`!rmc rule link` или `/rule link`",
-                inline=False
+                inline=True
             )
             
-            embed.set_footer(text="Выберите нужный пункт для просмотра")
+            embed.set_footer(text="Выберите нужный пункт для просмотра подробного описания")
             await ctx.send(embed=embed)
             return
 
         answer = rules_map.get(rule_id)
         if answer:
-            # Embed для конкретного правила
             if rule_id.isdigit():
-                title = f"📜 Правило {rule_id}"
-                color = RMC_EMBED_COLOR  # Красный для правил
+                rule_name = self.rule_names.get(rule_id, f"Правило {rule_id}")
+                title = f"📜 {rule_name}"
+                color = RMC_EMBED_COLOR
             elif rule_id == "basis":
-                title = "⚖️ Основа основ"
-                color = RMC_EMBED_COLOR  # Оранжевый
-            else:  # link
-                title = "🔗 Ссылка на правила"
-                color = RMC_EMBED_COLOR  # Фиолетовый
+                rule_name = self.rule_names.get("basis", "Основа основ")
+                title = f"⚖️ {rule_name}"
+                color = RMC_EMBED_COLOR
+            else:  
+                rule_name = self.rule_names.get("link", "Ссылка на правила")
+                title = f"🔗 {rule_name}"
+                color = RMC_EMBED_COLOR
             
             embed = discord.Embed(
                 title=title,
@@ -112,7 +133,6 @@ class Rules(commands.Cog):
                 timestamp=discord.utils.utcnow()
             )
             
-            # Добавляем разные футеры в зависимости от типа
             if rule_id.isdigit():
                 embed.set_footer(text="Соблюдайте правила сервера!")
             elif rule_id == "basis":
@@ -122,19 +142,32 @@ class Rules(commands.Cog):
             
             await ctx.send(embed=embed)
         else:
-            # Embed для ошибки
             embed = discord.Embed(
                 title="❌ Ошибка",
                 description=f"Пункта `{rule_id}` нет в правилах!",
                 color=RMC_EMBED_COLOR
             )
+            
+            available_rules = []
+            for i in range(1, 16):
+                rule_key = str(i)
+                rule_name = self.rule_names.get(rule_key, f"Правило {i}")
+                available_rules.append(f"• {rule_name} (`{i}`)")
+            
+            available_rules.append(f"• {self.rule_names.get('basis', 'Основа основ')} (`basis`)")
+            available_rules.append(f"• {self.rule_names.get('link', 'Ссылка на правила')} (`link`)")
+            
             embed.add_field(
                 name="Доступные пункты",
-                value="1-15, basis, link",
+                value="\n".join(available_rules),
                 inline=False
             )
             embed.set_footer(text="Используйте !rmc rule help для справки")
-            await ctx.send(embed=embed)
+
+            if ctx.interaction is not None:
+                await ctx.send(embed=embed, ephemeral=True)
+            else:
+                await ctx.send(embed=embed)
 
 async def setup(bot: commands.Bot):
     await bot.add_cog(Rules(bot))
