@@ -142,11 +142,12 @@ class FilterChannels(commands.Cog):
 
         has_attachments = bool(message.attachments)
         has_links = ("http://" in message.content) or ("https://" in message.content)
+        is_forwarded = message.flags.forwarded
 
         if message.channel.id not in filter_channel_ids:
             return
 
-        if not has_attachments and not has_links:
+        if not has_attachments and not has_links and not is_forwarded:
             try:
                 await message.delete()
                 print(f"Удалено сообщение от {message.author} в {message.channel.name} без вложений и ссылок")
