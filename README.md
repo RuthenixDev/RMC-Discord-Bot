@@ -1,4 +1,4 @@
-# RMC Discord Bot v0.2 (RuthenixDev Patch)
+# RMC Discord Bot v1.1 (RuthenixDev Patch)
 
 Официальный QoL-бот для Discord-сервера **РМК**.  
 Требуется **Python 3.11+** и зависимости из `requirements.txt`.
