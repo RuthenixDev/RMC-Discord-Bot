@@ -6,6 +6,7 @@ import aiohttp
 from discord import Webhook
 from main import RMC_EMBED_COLOR
 from main import BOT_TOKEN
+from utils import settings_cache as settings
 
 
 class Resolution(commands.Cog):
@@ -21,13 +22,25 @@ class Resolution(commands.Cog):
     @app_commands.guild_only()
     async def resolution(self, interaction: discord.Interaction):
         """Создать резолюцию"""
-        modal = ResolutionModal(
-            channel=interaction.channel,
-            guild=interaction.guild,
-            author=interaction.user,
-            bot=self.bot
-        )
-        await interaction.response.send_modal(modal)
+        # Проверка на админа
+        data = settings.load_settings()
+        admin_roles = data.get("admin_roles", [])
+        user_roles = [role.id for role in interaction.user.roles]
+        is_admin = interaction.user.guild_permissions.administrator or any(role_id in user_roles for role_id in admin_roles)
+
+        if is_admin:
+            modal = ResolutionModal(
+                channel=interaction.channel,
+                guild=interaction.guild,
+                author=interaction.user,
+                bot=self.bot
+            )
+            await interaction.response.send_modal(modal)
+        else:
+            await interaction.response.send_message(
+                "❌ У вас недостаточно прав для публикации резолюций",
+                ephemeral=True
+            )
 
 
 class ResolutionModal(discord.ui.Modal, title="Создание резолюции"):
