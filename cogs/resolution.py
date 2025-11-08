@@ -1,5 +1,4 @@
 import discord
-import datetime
 from discord.ext import commands
 from discord import app_commands
 import aiohttp
@@ -13,8 +12,20 @@ from utils import settings_cache as settings
 class Resolution(commands.Cog):
     """Cog для написания резолюций"""
 
-    def __init__(self, bot: commands.Bot):
+    def __init__(self, bot: commands.Bot, guild: discord.Guild):
         self.bot = bot
+        self.guild = guild
+
+    async def cog_check(self, ctx: commands.Context):
+        data = settings.load_settings()
+        admin_roles = data.get("admin_roles", [])
+
+        if ctx.author.guild_permissions.administrator:
+            return True
+        if any(str(role.id) in admin_roles for role in ctx.author.roles):
+            return True
+
+        raise commands.CheckFailure("❌ У вас нет прав для этого раздела команд. Если вы считаете это ошибкой, свяжитесь с администратором.")
 
     @app_commands.command(
         name="resolution",
@@ -23,25 +34,13 @@ class Resolution(commands.Cog):
     @app_commands.guild_only()
     async def resolution(self, interaction: discord.Interaction):
         """Создать резолюцию"""
-        # Проверка на админа
-        data = settings.load_settings()
-        admin_roles = data.get("admin_roles", [])
-        user_roles = [role.id for role in interaction.user.roles]
-        is_admin = interaction.user.guild_permissions.administrator or any(role_id in user_roles for role_id in admin_roles)
-
-        if is_admin:
-            modal = ResolutionModal(
-                channel=interaction.channel,
-                guild=interaction.guild,
-                author=interaction.user,
-                bot=self.bot
-            )
-            await interaction.response.send_modal(modal)
-        else:
-            await interaction.response.send_message(
-                "❌ У вас недостаточно прав для публикации резолюций",
-                ephemeral=True
-            )
+        modal = ResolutionModal(
+            channel=interaction.channel,
+            guild=interaction.guild,
+            author=interaction.user,
+            bot=self.bot
+        )
+        await interaction.response.send_modal(modal)
 
 
 class ResolutionModal(discord.ui.Modal, title="Создание резолюции"):
@@ -82,7 +81,7 @@ class ResolutionModal(discord.ui.Modal, title="Создание резолюци
             duration_days = int(self.duration.value)
             if duration_days < 1 or duration_days > 7:
                 await interaction.response.send_message(
-                    "❌ Длительность голосования должна быть от 1 до 7 дней!",
+                    "❌ Длительность голосования должна быть от 1 до 7 дней.",
                     ephemeral=True
                 )
                 return
@@ -101,13 +100,18 @@ class ResolutionModal(discord.ui.Modal, title="Создание резолюци
         )
         embed.set_footer(text=f"Автор: {self.author.display_name}")
 
-        # Сначала отвечаем на взаимодействие
         await interaction.response.send_message("✅ Резолюция публикуется...", ephemeral=True)
         
-        # Отправляем резолюцию в канал
-        resolution_message = await self.channel.send(content="@everyone", embed=embed)
+        data = settings.load_settings()
+        admin_roles_ids = data.get("admin_roles", [])
+
+        admin_mentions = " ".join(
+            role.mention
+            for rid in admin_roles_ids
+            if (role := self.guild.get_role(rid))
+        ) or "⚠️ (Нет настроенных админ-ролей)"
+        resolution_message = await self.channel.send(content=admin_mentions, embed=embed)
         
-        # Создаем опрос через HTTP запрос
         await self.create_poll(interaction, duration_days)
 
     async def create_poll(self, interaction: discord.Interaction, duration_days: int):
@@ -128,7 +132,7 @@ class ResolutionModal(discord.ui.Modal, title="Создание резолюци
                         {"poll_media": {"text": "Против", "emoji": {"id": 1419728189059502080, "name": "declined"}}}, #<:declined:1422601837370146969>
                         {"poll_media": {"text": "Воздерживаюсь", "emoji": {"id": 1419906353316495471,"name": "abstained"}}} #<:abstained:1422601751336321096>
                     ],
-                    "duration": duration_days * 24,  # Конвертируем дни в часы
+                    "duration": duration_days * 24,
                     "allow_multiselect": False
                 }
             }
@@ -146,7 +150,6 @@ class ResolutionModal(discord.ui.Modal, title="Создание резолюци
                         error_text = await response.text()
                         print(f"[ResolutionModal] Failed to create poll: {response.status} - {error_text}")
                         
-                        # Отправляем сообщение об ошибке
                         error_embed = discord.Embed(
                             title="❌ Ошибка при создании опроса",
                             description="Не удалось создать опрос для голосования. Проверьте права бота.",
@@ -157,7 +160,6 @@ class ResolutionModal(discord.ui.Modal, title="Создание резолюци
         except Exception as e:
             print(f"[ResolutionModal] Error creating poll: {e}")
             
-            # Отправляем сообщение об ошибке
             error_embed = discord.Embed(
                 title="❌ Ошибка при создании опроса",
                 description=f"Произошла ошибка: {str(e)}",
