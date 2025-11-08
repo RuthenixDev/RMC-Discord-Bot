@@ -91,8 +91,8 @@ class Wiki(commands.Cog):
             await ctx.send(embed=embed)
         else:
             embed = discord.Embed(
-                title="❌ Такой статьи нет в базе!",
-                description=f"Статья `{wiki_id}` не найдена.",
+                title="❌ Ошибка",
+                description="Такой статьи нет в базе!",
                 color=RMC_EMBED_COLOR,
                 timestamp=discord.utils.utcnow(),
             )

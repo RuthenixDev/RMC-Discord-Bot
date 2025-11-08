@@ -144,25 +144,11 @@ class Rules(commands.Cog):
         else:
             embed = discord.Embed(
                 title="❌ Ошибка",
-                description=f"Пункта `{rule_id}` нет в правилах!",
+                description=f"Такого пункта нет в правилах!",
                 color=RMC_EMBED_COLOR
             )
             
-            available_rules = []
-            for i in range(1, 16):
-                rule_key = str(i)
-                rule_name = self.rule_names.get(rule_key, f"Правило {i}")
-                available_rules.append(f"• {rule_name} (`{i}`)")
-            
-            available_rules.append(f"• {self.rule_names.get('basis', 'Основа основ')} (`basis`)")
-            available_rules.append(f"• {self.rule_names.get('link', 'Ссылка на правила')} (`link`)")
-            
-            embed.add_field(
-                name="Доступные пункты",
-                value="\n".join(available_rules),
-                inline=False
-            )
-            embed.set_footer(text="Используйте !rmc rule help для справки")
+            embed.set_footer(text="Используйте !rmc rule help для справки по правилам.")
 
             if ctx.interaction is not None:
                 await ctx.send(embed=embed, ephemeral=True)
