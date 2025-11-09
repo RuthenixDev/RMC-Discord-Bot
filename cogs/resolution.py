@@ -1,10 +1,13 @@
-import discord
+import discord, os, aiohttp
 from discord.ext import commands
-from discord import app_commands
-import aiohttp
-from discord import Webhook
+from discord import app_commands, Webhook
 from constants import RMC_EMBED_COLOR
-from main import TOKEN
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+    TOKEN = os.getenv("TOKEN")
+except:
+    print('Can\'t load TOKEN from .env')
 from utils import settings_cache as settings
 
 
@@ -22,7 +25,7 @@ class Resolution(commands.Cog):
 
         if ctx.author.guild_permissions.administrator:
             return True
-        if any(str(role.id) in admin_roles for role in ctx.author.roles):
+        elif any(str(role.id) in admin_roles for role in ctx.author.roles):
             return True
 
         raise commands.CheckFailure("❌ У вас нет прав для этого раздела команд. Если вы считаете это ошибкой, свяжитесь с администратором.")

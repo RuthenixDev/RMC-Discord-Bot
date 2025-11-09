@@ -16,7 +16,7 @@ class StarChannels(commands.Cog):
 
         if ctx.author.guild_permissions.administrator:
             return True
-        if any(str(role.id) in admin_roles for role in ctx.author.roles):
+        elif any(str(role.id) in admin_roles for role in ctx.author.roles):
             return True
 
         raise commands.CheckFailure()
