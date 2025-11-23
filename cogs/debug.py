@@ -1,6 +1,9 @@
 from discord.ext import commands
-import discord
+import discord,json,io
 from utils.permissions import check_cog_access
+from utils import settings_cache as settings
+from constants import MAX_MESSAGE,RMC_EMBED_COLOR
+
 
 
 class Debug(commands.Cog):
@@ -33,6 +36,30 @@ class Debug(commands.Cog):
                             inline=False)
 
         await ctx.reply(embed=embed)
+
+    @commands.hybrid_command(name="showjson", with_app_command=True, description="Вывести содержимое settings.json")
+    async def showjson(self, ctx: commands.Context):
+        # Загрузка настроек из кэша или файла
+        data = settings.load_settings()
+
+        if not data:
+            await ctx.reply("❌ Файл `settings.json` пуст или отсутствует.")
+            return
+
+        # Форматируем красиво
+        pretty_json = json.dumps(data, indent=4, ensure_ascii=False)
+
+        if len(pretty_json) <= MAX_MESSAGE:
+            embed=discord.Embed( description="```json\n" + pretty_json + "\n```", color=RMC_EMBED_COLOR )
+            await ctx.reply(embed=embed)
+            return
+
+        file_bytes = io.BytesIO(pretty_json.encode("utf-8"))
+        embed=discord.Embed( description="⚠️ Содержимое файла слишком большое для отправки в сообщении, отправляю как файл.", color=RMC_EMBED_COLOR )
+        await ctx.reply(
+            embed=embed,
+            file=discord.File(file_bytes, filename="settings.json")
+        )
 
 async def setup(bot):
     await bot.add_cog(Debug(bot))

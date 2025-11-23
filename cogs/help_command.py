@@ -37,7 +37,7 @@ class HelpCmd(commands.Cog):
                 inline=False
             )
 
-        await ctx.send(ctx, embed)
+        await ctx.reply(embed=embed)
 
 
 async def setup(bot):
