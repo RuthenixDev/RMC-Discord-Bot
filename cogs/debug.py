@@ -13,13 +13,6 @@ class Debug(commands.Cog):
         if not allowed:
             raise commands.CheckFailure()
         return True
-    
-    async def send(self, ctx: commands.Context, embed: discord.Embed):
-        if ctx.interaction:
-            await ctx.defer()
-            return await ctx.send(embed=embed)
-        else:
-            return await ctx.reply(embed=embed)
 
     @commands.hybrid_command(name="ping", with_app_command=True, description="Проверка бота и вывод ошибок")
     async def ping(self, ctx: commands.Context):
@@ -39,7 +32,7 @@ class Debug(commands.Cog):
                             value=f"```{self.bot.last_critical_error[-1000:]}```",  # обрезка до 1000 символов
                             inline=False)
 
-        await self.send(embed=embed)
+        await ctx.reply(embed=embed)
 
 async def setup(bot):
     await bot.add_cog(Debug(bot))

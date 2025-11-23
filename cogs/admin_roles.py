@@ -35,24 +35,20 @@ class AdminSettings(commands.Cog):
         admin_roles_ids = set(data.get("admin_roles", []))
 
         if role.id in admin_roles_ids:
-            return await self.send(
-                ctx,
-                discord.Embed(
-                    description=f"⚠️ Роль **{role.name}** уже является административной.",
-                    color=discord.Color.dark_gray()
-                )
+            embed = discord.Embed( description=f"⚠️ Роль **{role.name}** уже является административной.", color=discord.Color.dark_gray() )
+            await ctx.reply(
+                embed=embed
             )
+            return
 
         admin_roles_ids.add(role.id)
         self.update_admin_roles(admin_roles_ids)
 
-        await ctx.send(
-            ctx,
-            discord.Embed(
-                description=f"✅ Роль **{role.name}** добавлена в административные.",
-                color=discord.Color.green()
-            )
+        embed=discord.Embed( description=f"✅ Роль **{role.name}** добавлена в административные.", color=discord.Color.green())
+        await ctx.reply(
+            embed=embed
         )
+        return
 
     # --------------------
     # COMMAND: removeadmin
@@ -67,24 +63,20 @@ class AdminSettings(commands.Cog):
         admin_roles_ids = set(data.get("admin_roles", []))
 
         if role.id not in admin_roles_ids:
-            return await self.send(
-                ctx,
-                discord.Embed(
-                    description=f"⚠️ Роль **{role.name}** не является административной.",
-                    color=discord.Color.dark_gray()
-                )
+            embed=discord.Embed( description=f"⚠️ Роль **{role.name}** не является административной.", color=discord.Color.dark_gray() )
+            await ctx.reply(
+                embed=embed
             )
+            return 
 
         admin_roles_ids.remove(role.id)
         self.update_admin_roles(admin_roles_ids)
 
-        await ctx.send(
-            ctx,
-            discord.Embed(
-                description=f"🗑️ Роль **{role.name}** удалена из административных.",
-                color=discord.Color.dark_red()
-            )
+        embed=discord.Embed( description=f"🗑️ Роль **{role.name}** удалена из административных.", color=discord.Color.dark_red() )
+        await ctx.reply(
+            embed=embed
         )
+        return 
 
     # ---------------------
     # COMMAND: listadmins
@@ -99,13 +91,11 @@ class AdminSettings(commands.Cog):
         admin_roles_ids = set(data.get("admin_roles", []))
 
         if not admin_roles_ids:
-            return await self.send(
-                ctx,
-                discord.Embed(
-                    description="📭 Список административных ролей пуст.",
-                    color=discord.Color.dark_gray()
-                )
+            embed=discord.Embed( description="📭 Список административных ролей пуст.", color=discord.Color.dark_gray() )
+            await ctx.reply(
+                embed=embed
             )
+            return 
 
         embed = discord.Embed(
             title="💎 Административные роли",
@@ -120,7 +110,7 @@ class AdminSettings(commands.Cog):
                 inline=False
             )
 
-        await ctx.send(ctx, embed)
+        await ctx.reply(embed=embed)
 
 
 async def setup(bot):

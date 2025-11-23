@@ -5,7 +5,7 @@ import healthcheck
 
 load_dotenv()
 TOKEN = os.getenv("TOKEN")
-print(f"TOKEN найден: {bool(TOKEN)}")
+print(f"TOKEN найден: {TOKEN}")
 COGS_DIR = "cogs"
 
 print("🚀 Старт main.py")
