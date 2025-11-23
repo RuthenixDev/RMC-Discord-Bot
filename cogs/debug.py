@@ -1,22 +1,25 @@
 from discord.ext import commands
 import discord
-import time
-from utils import settings_cache as settings
+from utils.permissions import check_cog_access
+
 
 class Debug(commands.Cog):
+    required_access = "admin"
     def __init__(self, bot):
         self.bot = bot
 
     async def cog_check(self, ctx: commands.Context):
-        data = settings.load_settings()
-        admin_roles = data.get("admin_roles", [])
-
-        if ctx.author.guild_permissions.administrator:
-            return True
-        elif any(str(role.id) in admin_roles for role in ctx.author.roles):
-            return True
-
-        raise commands.CheckFailure("❌ У вас нет прав для этого раздела команд. Если вы считаете это ошибкой, свяжитесь с администратором.")
+        allowed = await check_cog_access(ctx, self.required_access)
+        if not allowed:
+            raise commands.CheckFailure()
+        return True
+    
+    async def send(self, ctx: commands.Context, embed: discord.Embed):
+        if ctx.interaction:
+            await ctx.defer()
+            return await ctx.send(embed=embed)
+        else:
+            return await ctx.reply(embed=embed)
 
     @commands.hybrid_command(name="ping", with_app_command=True, description="Проверка бота и вывод ошибок")
     async def ping(self, ctx: commands.Context):
@@ -36,7 +39,7 @@ class Debug(commands.Cog):
                             value=f"```{self.bot.last_critical_error[-1000:]}```",  # обрезка до 1000 символов
                             inline=False)
 
-        await ctx.send(embed=embed)
+        await self.send(embed=embed)
 
 async def setup(bot):
     await bot.add_cog(Debug(bot))

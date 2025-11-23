@@ -2,24 +2,22 @@ import discord
 from discord.ext import commands
 from utils import settings_cache as settings
 from constants import RMC_EMBED_COLOR
+from utils.permissions import check_cog_access
 
 
 class StarChannels(commands.Cog):
     """Cog для управления ⭐-каналами и автоматической реакции."""
 
+    required_access = "admin"
+
     def __init__(self, bot: commands.Bot):
         self.bot = bot
 
     async def cog_check(self, ctx: commands.Context):
-        data = settings.load_settings()
-        admin_roles = data.get("admin_roles", [])
-
-        if ctx.author.guild_permissions.administrator:
-            return True
-        elif any(str(role.id) in admin_roles for role in ctx.author.roles):
-            return True
-
-        raise commands.CheckFailure()
+        allowed = await check_cog_access(ctx, self.required_access)
+        if not allowed:
+            raise commands.CheckFailure()
+        return True
         
 
     def update_star_channels(self, new_ids):

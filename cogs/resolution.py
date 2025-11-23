@@ -8,27 +8,23 @@ try:
     TOKEN = os.getenv("TOKEN")
 except:
     print('Can\'t load TOKEN from .env')
+from utils.permissions import check_cog_access
 from utils import settings_cache as settings
 
 
 
 class Resolution(commands.Cog):
     """Cog для написания резолюций"""
+    required_access = "admin"
 
-    def __init__(self, bot: commands.Bot, guild: discord.Guild):
+    def __init__(self, bot):
         self.bot = bot
-        self.guild = guild
 
     async def cog_check(self, ctx: commands.Context):
-        data = settings.load_settings()
-        admin_roles = data.get("admin_roles", [])
-
-        if ctx.author.guild_permissions.administrator:
-            return True
-        elif any(str(role.id) in admin_roles for role in ctx.author.roles):
-            return True
-
-        raise commands.CheckFailure("❌ У вас нет прав для этого раздела команд. Если вы считаете это ошибкой, свяжитесь с администратором.")
+        allowed = await check_cog_access(ctx, self.required_access)
+        if not allowed:
+            raise commands.CheckFailure()
+        return True
 
     @app_commands.command(
         name="resolution",

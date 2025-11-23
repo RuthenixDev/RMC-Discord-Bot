@@ -3,9 +3,17 @@ from typing import Optional
 from discord import app_commands
 from discord.ext import commands
 from constants import RMC_EMBED_COLOR
+from utils.permissions import check_cog_access
 
 class Wiki(commands.Cog):
+    required_access = None
     """Cog для просмотра страниц Вики"""
+
+    async def cog_check(self, ctx: commands.Context):
+        allowed = await check_cog_access(ctx, self.required_access)
+        if not allowed:
+            raise commands.CheckFailure()
+        return True
 
     def __init__(self, bot: commands.Bot):
         self.bot = bot

@@ -5,6 +5,7 @@ from datetime import datetime, date, timezone, timedelta
 from constants import RMC_EMBED_COLOR
 
 class Anniversary(commands.Cog):
+    required_access = None
     """Cog для просмотра даты годовщины сервера"""
 
     def __init__(self, bot: commands.Bot):
