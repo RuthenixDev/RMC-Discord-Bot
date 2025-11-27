@@ -1,24 +1,20 @@
 import discord
 from discord.ext import commands
 from utils import settings_cache as settings
-
+from utils.permissions import check_cog_access
 
 class Starboard(commands.Cog):
+    required_access = "admin"
+
     def __init__(self, bot):
         self.bot = bot
         self.star_emoji = "⭐"
 
     async def cog_check(self, ctx: commands.Context):
-        """Проверка на доступ: админ или роль из admin_roles"""
-        data = settings.load_settings()
-        admin_roles = data.get("admin_roles", [])
-
-        if ctx.author.guild_permissions.administrator:
-            return True
-        if any(str(role.id) in admin_roles for role in ctx.author.roles):
-            return True
-
-        raise commands.CheckFailure("")
+        allowed = await check_cog_access(ctx, self.required_access)
+        if not allowed:
+            raise commands.CheckFailure()
+        return True
 
     def update_star_threshold(self, new_target: int):
         """Обновить количество реакций для попадания в starboard"""

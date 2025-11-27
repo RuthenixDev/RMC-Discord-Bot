@@ -5,7 +5,7 @@ import healthcheck
 
 load_dotenv()
 TOKEN = os.getenv("TOKEN")
-print(f"TOKEN найден: {bool(TOKEN)}")
+print(f"TOKEN найден: {TOKEN}")
 COGS_DIR = "cogs"
 
 print("🚀 Старт main.py")
@@ -29,7 +29,7 @@ bot.last_critical_error = None  # текст последней критичес
 
 @bot.event
 async def on_ready():
-    print(f"✅ Бот запущен как {bot.user}")
+    print(f"🎊 Бот запущен как {bot.user}")
     try:
         synced = await bot.tree.sync()  # глобальная регистрация
         print(f"🌍 Синхронизированы глобальные команды: {len(synced)}")
@@ -64,11 +64,11 @@ async def on_command_error(ctx, error):
     if isinstance(error, commands.CheckFailure):
         if hasattr(ctx, "interaction") and ctx.interaction:
             await ctx.interaction.response.send_message(
-                "❌ У вас нет прав для этой команды.",
+                "❌ У вас нет прав для этого раздела команд. Если вы считаете это ошибкой, свяжитесь с администратором.",
                 ephemeral=True
             )
         else:
-            await ctx.send("❌ У вас нет прав для этой команды.")
+            await ctx.send("❌ У вас нет прав для этого раздела команд. Если вы считаете это ошибкой, свяжитесь с администратором.")
         return
 
     raise error
