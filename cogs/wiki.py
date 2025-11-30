@@ -59,6 +59,7 @@ class Wiki(commands.Cog):
             "character": "https://hoi4.paradoxwikis.com/Character_modding",
             "localisation": "https://hoi4.paradoxwikis.com/Localisation",
             "national_focuses": "https://hoi4.paradoxwikis.com/National_focus_modding",
+            "triggers": "https://hoi4.paradoxwikis.com/Triggers",
         }
     @commands.hybrid_command(
         name="wiki",
