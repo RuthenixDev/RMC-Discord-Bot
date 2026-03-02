@@ -209,6 +209,7 @@ class Isolation(commands.Cog):
                     json.dump(isolated_data, f, indent=4, ensure_ascii=False)
 
             #лишаем ролей
+            await interaction.response.defer(ephemeral=True)
             if isolation_member_roles:
                 await isolation_member.remove_roles(*isolation_member_roles)
  
@@ -231,7 +232,7 @@ class Isolation(commands.Cog):
                     value=f"❌Причина не указана"
                 )
             #response_embed.set_footer(text="С")
-            await interaction.response.send_message(embed=response_embed, ephemeral=True)
+            await interaction.followup.send(embed=response_embed, ephemeral=True)
 
             log_embed = discord.Embed(
                 title="Участник был изолирован",
@@ -301,17 +302,18 @@ class Isolation(commands.Cog):
                 if role:
                     roles_to_restore.append(role)
 
-            await member.remove_roles(role_object, reason=f"Модератор {interaction.user} снял изоляцию.")
+            await interaction.response.defer(ephemeral=True)
+            await member.remove_roles(role_object, reason=f"Модератор {interaction.user} снял изоляцию по причине {unisolation_reason}")
 
             if roles_to_restore:
-                await member.add_roles(*roles_to_restore, reason=f"Модератор {interaction.user} снял изоляцию.")
+                await member.add_roles(*roles_to_restore, reason=f"Модератор {interaction.user} снял изоляцию по причине {unisolation_reason}")
 
             del isolated_data[user_id]
             with open(isolated_users, 'w', encoding='utf-8') as f:
                 json.dump(isolated_data, f, indent=4, ensure_ascii=False)
 
             response_embed = discord.Embed(
-                title=f"✅Успешное помилование",
+                title=f"✅Успешное возвращение",
                 description=f"Участник {member.mention} был выпущен из изолятора!",
                 color=RMC_EMBED_COLOR,
                 timestamp=discord.utils.utcnow()
@@ -327,15 +329,15 @@ class Isolation(commands.Cog):
                     value=f"❌Причина не указана"
                 )
             #response_embed.set_footer(text="С")
-            await interaction.response.send_message(embed=response_embed, ephemeral=True)
+            await interaction.followup.send(embed=response_embed, ephemeral=True)
 
             log_embed = discord.Embed(
-                title="Участник был выпущен из изолятора",
+                title="Участник успешно возвращён",
                 color=RMC_EMBED_COLOR,
                 timestamp=discord.utils.utcnow()
             )
             log_embed.add_field(
-                name="Изолированный участник",
+                name="Выпущенный участник",
                 value=f"{member.mention} | {member} | {member.id}",
                 inline=False
             )
@@ -352,7 +354,7 @@ class Isolation(commands.Cog):
             
         else:
             embed = discord.Embed(
-                title="❌Ошибка при выпуске из изоляции",
+                title="❌Ошибка при возвращении из изоляции",
                 description="Выбранный участник ещё не изолирован!",
                 color=RMC_EMBED_COLOR,
                 timestamp=discord.utils.utcnow()
