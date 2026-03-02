@@ -2,3 +2,5 @@
 settings.json
 *.pyc
 *.pyc
+RMC-Discord-Bot.code-workspace
+isolated_users.json
