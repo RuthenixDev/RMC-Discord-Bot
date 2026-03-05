@@ -1,7 +1,71 @@
 import discord
 from discord.ext import commands
+from discord.ui import Button, View
 from utils.permissions import check_cog_access
+from utils import settings_cache as settings
 from constants import RMC_EMBED_COLOR
+
+
+class PaginatedHelpView(View):
+    def __init__(self, command_chunks, author, admin_command_names=None, description=None):
+        super().__init__(timeout=60)
+        self.command_chunks = command_chunks
+        self.current_page = 0
+        self.author = author
+        self.admin_command_names = admin_command_names or []
+        self.description = description
+        #self.message = None
+    
+    @discord.ui.button(label="◀️ Назад", style=discord.ButtonStyle.secondary, custom_id="help_prev")
+    async def previous_button(self, interaction: discord.Interaction, button: Button):
+        if interaction.user != self.author:
+            return await interaction.response.send_message("❌ Эта кнопка не для тебя!", ephemeral=True)
+        
+        self.current_page = (self.current_page - 1) % len(self.command_chunks)
+        embed = self.create_embed()
+        await interaction.response.edit_message(embed=embed, view=self)
+    
+    @discord.ui.button(label="▶️ Вперед", style=discord.ButtonStyle.secondary, custom_id="help_next")
+    async def next_button(self, interaction: discord.Interaction, button: Button):
+        if interaction.user != self.author:
+            return await interaction.response.send_message("❌ Эта кнопка не для тебя!", ephemeral=True)
+        
+        self.current_page = (self.current_page + 1) % len(self.command_chunks)
+        embed = self.create_embed()
+        await interaction.response.edit_message(embed=embed, view=self)
+    
+    def create_embed(self):
+        embed = discord.Embed(
+            title=f"🛠️ Список команд (страница {self.current_page + 1}/{len(self.command_chunks)})",
+            color=RMC_EMBED_COLOR,
+            description=self.description
+        )
+        
+        commands_list = self.command_chunks[self.current_page]
+        for command in commands_list:
+            name = f"!rmc {command.name}"
+            if command.name in self.admin_command_names:  # проверка по имени
+                name = "👑 " + name
+            embed.add_field(
+                name=name,
+                value=command.description or "Без описания",
+                inline=False
+            )
+        
+        return embed
+    #async def on_timeout(self):
+    #    """Когда кнопки истекли на сцене появлется данный герой"""
+    #    for child in self.children:
+    #        child.disabled = True
+#
+    #    if self.message:
+    #        try:
+    #            embed = self.create_embed()
+    #            embed.set_footer(text="⏰ Время ожидания истекло. Используйте /help заново.")
+    #            await self.message.edit(embed=embed, view=self)
+    #        except:
+    #            pass
+
 
 
 class HelpCmd(commands.Cog):
@@ -22,22 +86,69 @@ class HelpCmd(commands.Cog):
         description="Показывает список команд"
     )
     async def help(self, ctx: commands.Context):
-        embed = discord.Embed(
-            title="🛠️ Список доступных команд",
-            color=RMC_EMBED_COLOR
-        )
-
+        # Собираем все команды
+        regular_commands  = []
+        admin_commands = []
         for command in self.bot.commands:
-            if command.hidden:
+            if command.hidden or command.name == "help":  # Пропускаем саму команду help
                 continue
+            if hasattr(command.cog, 'required_access') and command.cog.required_access == "admin":
+                admin_commands.append(command)
+            else:
+                regular_commands.append(command)
 
-            embed.add_field(
-                name=f"!rmc {command.name}",
-                value=command.description or "",
-                inline=False
+        user_roles = ctx.author.roles
+
+        settings_data = settings.load_settings()
+        admin_roles = settings_data.get('admin_roles', [])
+        is_admin = any(role.id in admin_roles for role in user_roles)
+        
+        if is_admin:
+            display_commands = regular_commands + admin_commands
+        else:
+            display_commands = regular_commands
+        # Разбиваем на группы по 20 команд (оставляем запас)
+
+        desc="Команды для админов помечены 👑" if is_admin else None
+        print(f"is_admin={is_admin}, desc={desc}")  # посмотри в консоль
+
+        chunk_size = 20
+        command_chunks = [display_commands[i:i + chunk_size] 
+                         for i in range(0, len(display_commands), chunk_size)]
+        
+        if not command_chunks:
+            await ctx.reply("❌ Команды не найдены!")
+            return
+        
+        
+
+        # Если всего 1 страница - отправляем просто embed
+        if len(command_chunks) == 1:
+            
+            embed = discord.Embed(
+                title="🛠️ Список доступных команд",
+                color=RMC_EMBED_COLOR,
+                description=desc
             )
-
-        await ctx.reply(embed=embed)
+            
+            for command in display_commands:
+                is_admin_command = hasattr(command.cog, 'required_access') and command.cog.required_access == 'admin'
+                name = f"!rmc {command.name}"
+                if is_admin_command:
+                    name = "👑 " + name
+                embed.add_field(
+                    name=name,
+                    value=command.description or "Без описания",
+                    inline=False
+                )
+            
+            await ctx.reply(embed=embed)
+        else:
+            # Если много страниц - используем пагинацию
+            admin_names = [cmd.name for cmd in admin_commands]  # список имён админских команд
+            view = PaginatedHelpView(command_chunks, ctx.author, admin_names, description=desc)
+            embed = view.create_embed()
+            await ctx.reply(embed=embed, view=view)
 
 
 async def setup(bot):
