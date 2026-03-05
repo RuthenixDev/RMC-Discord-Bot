@@ -1,5 +1,6 @@
 from discord.ext import commands
 import discord,json,io
+from discord import app_commands
 from utils.permissions import check_cog_access
 from utils import settings_cache as settings
 from constants import MAX_MESSAGE,RMC_EMBED_COLOR
@@ -60,6 +61,82 @@ class Debug(commands.Cog):
             embed=embed,
             file=discord.File(file_bytes, filename="settings.json")
         )
+    
+    @app_commands.command(
+        name="set_log",
+        description="Установить канал для отправки логов"
+    )
+    @app_commands.guild_only()
+    @app_commands.describe(
+        log_channel = "Канал для отправки логов",
+    )
+    async def set_log(self, interaction: discord.Interaction, log_channel: discord.TextChannel):
+
+        
+        if not log_channel.permissions_for(interaction.guild.me).send_messages:
+            embed = discord.Embed(
+                title="❌ Ошибка",
+                description=f"У бота нет прав писать в канал {log_channel.mention}",
+                color=RMC_EMBED_COLOR
+            )
+            await interaction.response.send_message(embed=embed, ephemeral=True)
+            return
+        
+        try: 
+            settings_data = settings.load_settings()
+            settings_data['log_channel'] = log_channel.id
+            settings.save_settings(settings_data)
+
+            embed = discord.Embed(
+                title="✅ Канал для логов успешно установлен",
+                description=f"Установленный канал: {log_channel.mention}",
+                color=RMC_EMBED_COLOR
+            )
+            await interaction.response.send_message(embed=embed, ephemeral=True)
+            log_embed = discord.Embed(
+                title="✅ Этот канал успешно установлен для отправки логов",
+                description=f"Для изменения используйте `/set_log`",
+                color=RMC_EMBED_COLOR
+            )
+            await log_channel.send(embed=log_embed)
+        except Exception as e:
+            embed = discord.Embed(
+                title="❌ Ошибка установки канала для логов",
+                description=f"Ошибка `{e}`",
+                color=RMC_EMBED_COLOR
+            )
+            await interaction.response.send_message(embed=embed, ephemeral=True)
+
+    @app_commands.command(
+        name="show_log",
+        description="Посмотреть установленный канал для логов"
+    )
+    @app_commands.guild_only()
+    async def show_log(self, interaction: discord.Interaction):
+
+        settings_data = settings.load_settings()
+        channel_id = settings_data.get('log_channel')
+        log_channel = interaction.guild.get_channel(channel_id) if channel_id else None 
+
+        if log_channel:
+            #text = interaction.user.mention
+            embed = discord.Embed(
+                title="📃 Канал для логов",
+                description=f"Для логов установлен этот канал: {log_channel.mention}",
+                color=RMC_EMBED_COLOR
+            )
+            await interaction.response.send_message(embed=embed, ephemeral=True)
+            return
+        else:  
+            embed = discord.Embed(
+                title="❌ Канал для логов не установлен",
+                description=f"Для установки используйте `/set_log`",
+                color=RMC_EMBED_COLOR
+            )
+            await interaction.response.send_message(embed=embed, ephemeral=True)
+            return
+            
+
 
 async def setup(bot):
     await bot.add_cog(Debug(bot))

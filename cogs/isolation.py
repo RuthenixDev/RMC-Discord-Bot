@@ -33,17 +33,17 @@ class Isolation(commands.Cog):
     @app_commands.guild_only()
     @app_commands.describe(
         isolation_role = "Роль изоляции",
-        log_channel = "Канал для логов"
+        #log_channel = "Канал для логов"
     )
-    async def isolate_settings(self, interaction: discord.Interaction, isolation_role: Optional[discord.Role], log_channel: Optional[discord.TextChannel]):
+    async def isolate_settings(self, interaction: discord.Interaction, isolation_role: Optional[discord.Role]):
 
         settings_data = settings.load_settings()
 
-        if isolation_role is None and log_channel is None:
+        if isolation_role is None:
             saved_role_id = settings_data.get('isolation_role_id')
             role_object = interaction.guild.get_role(saved_role_id) if saved_role_id else None
 
-            saved_channel_id = settings_data.get('isolation_log_channel_id')
+            saved_channel_id = settings_data.get('log_channel')
             channel_object = interaction.guild.get_channel(saved_channel_id) if saved_channel_id else None
 
             role_text = role_object.mention if role_object else "❌Не настроена"
@@ -51,7 +51,7 @@ class Isolation(commands.Cog):
             #print("Не было указаны роли, публикую сохранённые настройки")
             embed = discord.Embed(
                 title="⚙️Сохранённые настройки",
-                description=f"В настройках сохранено следующее: \n - Роль изоляции: {role_text} \n - Канал для логов: {channel_text}",
+                description=f"В настройках сохранено следующее: \n - Роль изоляции: {role_text} \n - Канал для логов (установить в /set_log): {channel_text}",
                 color=RMC_EMBED_COLOR,
                 timestamp=discord.utils.utcnow()
             )
@@ -82,21 +82,6 @@ class Isolation(commands.Cog):
             else: 
                 settings_data['isolation_role_id'] = isolation_role.id
                 changes.append(f"Роль {isolation_role.mention}")
-                needs_save = True
-
-        if log_channel:
-            if not log_channel.permissions_for(interaction.guild.me).send_messages:
-                embed = discord.Embed(
-                    title="❌Ошибка",
-                    description="У бота нет прав писать в выбранный канал!",
-                    color=RMC_EMBED_COLOR,
-                    timestamp=discord.utils.utcnow()
-                )
-                await interaction.response.send_message(embed=embed, ephemeral=True)
-                return
-            else:
-                settings_data['isolation_log_channel_id'] = log_channel.id
-                changes.append(f"Канал {log_channel.mention}")
                 needs_save = True
 
         if needs_save:
@@ -138,7 +123,7 @@ class Isolation(commands.Cog):
             settings_data = settings.load_settings()
 
             role_id = settings_data.get('isolation_role_id')
-            channel_id = settings_data.get('isolation_log_channel_id')
+            channel_id = settings_data.get('log_channel')
 
             isolation_role = interaction.guild.get_role(role_id) if role_id else None
             log_channel = interaction.guild.get_channel(channel_id) if channel_id else None 
@@ -160,7 +145,7 @@ class Isolation(commands.Cog):
                     color=RMC_EMBED_COLOR,
                     timestamp=discord.utils.utcnow()
                 )
-                embed.set_footer(text="Для настройки используйте /isolate_settings.")
+                embed.set_footer(text="Для настройки используйте /set_log.")
                 await interaction.response.send_message(embed=embed, ephemeral=True)
                 return
 
@@ -321,7 +306,7 @@ class Isolation(commands.Cog):
             isolate_role = settings_data.get('isolation_role_id')
             role_object = interaction.guild.get_role(isolate_role) if isolate_role else None
 
-            channel_id = settings_data.get('isolation_log_channel_id')
+            channel_id = settings_data.get('log_channel')
             log_channel = interaction.guild.get_channel(channel_id) if channel_id else None 
 
 
@@ -439,7 +424,7 @@ class Isolation(commands.Cog):
                     timestamp=discord.utils.utcnow()
                 )
                 if not interaction.response.is_done():
-                    await interaction.response.send_message(embed=response_embed, ephemeral=True)
+                    await interaction.response.send_message(embed=embed, ephemeral=True)
                 else:
                     await interaction.followup.send(embed=embed, ephemeral=True)
                 return
