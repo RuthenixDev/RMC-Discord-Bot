@@ -1,6 +1,8 @@
 import discord
 import os
 import json
+import time
+from datetime import datetime
 from typing import Optional, List
 from discord.ext import commands
 from discord import app_commands
@@ -204,7 +206,12 @@ class Isolation(commands.Cog):
                 await interaction.response.send_message(embed=embed, ephemeral=True)
                 return
             else:
-                isolated_data[user_id] = role_ids
+                isolated_data[user_id] = {
+                    "roles": role_ids,
+                    "isolated_at": time.time(),
+                    "isolated_by": interaction.user.id,
+                    "reason": isolation_reason or None
+                }
                 with open(isolated_users, 'w', encoding='utf-8') as f:
                     json.dump(isolated_data, f, indent=4, ensure_ascii=False)
 
@@ -234,24 +241,42 @@ class Isolation(commands.Cog):
             #response_embed.set_footer(text="С")
             await interaction.followup.send(embed=response_embed, ephemeral=True)
 
+
+            user_data = isolated_data[user_id]  # получаем словарь с данными
+            #saved_roles_ids = user_data["roles"]
+            #isolated_by = user_data.get("isolated_by")  
+            #reason = user_data.get("reason", "Не указана")
+            isolation_date = user_data.get("isolated_at")
+            timestamp = user_data.get("isolated_at")
+
+            if timestamp:
+                discord_time = f"<t:{int(timestamp)}:d>"
+            else:
+                discord_time = "Неизвестно"
+
             log_embed = discord.Embed(
                 title="Участник был изолирован",
                 color=RMC_EMBED_COLOR,
                 timestamp=discord.utils.utcnow()
             )
             log_embed.add_field(
-                name="Изолированный участник",
+                name="Изолирован",
                 value=f"{isolation_member.mention} | {isolation_member} | {isolation_member.id}",
                 inline=False
             )
             log_embed.add_field(
-                name="Модератор",
-                value=f"{interaction.user.mention} | {interaction.user} | ({interaction.user.id})",
+                name="Изолировал",
+                value=f"{interaction.user.mention} | {interaction.user} | {interaction.user.id}",
                 inline=False
             )
             log_embed.add_field(
                 name="Причина",
                 value=f"```{isolation_reason}```"
+            )
+            log_embed.add_field(
+                name="Дата изоляции",
+                value=f"{discord_time}",
+                inline=True
             )
             await log_channel.send(embed=log_embed)
         except discord.Forbidden:
@@ -295,7 +320,17 @@ class Isolation(commands.Cog):
             isolated_data = {}
 
         if user_id in isolated_data:
-            saved_roles_ids = isolated_data[user_id]
+
+            user_data = isolated_data[user_id]
+            saved_roles_ids = user_data["roles"]
+            timestamp = user_data.get("isolated_at")
+            isolated_by = user_data.get("isolated_by")
+            reason = user_data.get("reason", "Не указана")
+            if timestamp:
+                discord_time = f"<t:{int(timestamp)}:d>"
+            else:
+                discord_time = "Неизвестно"
+
             roles_to_restore = []
             for role_id in saved_roles_ids:
                 role = interaction.guild.get_role(role_id)
@@ -314,7 +349,7 @@ class Isolation(commands.Cog):
 
             response_embed = discord.Embed(
                 title=f"✅Успешное возвращение",
-                description=f"Участник {member.mention} был выпущен из изолятора!",
+                description=f"Участник {member.mention} был возвращён из изолятора!",
                 color=RMC_EMBED_COLOR,
                 timestamp=discord.utils.utcnow()
             )
@@ -332,23 +367,32 @@ class Isolation(commands.Cog):
             await interaction.followup.send(embed=response_embed, ephemeral=True)
 
             log_embed = discord.Embed(
-                title="Участник успешно возвращён",
+                title="Участник бьл возвращён",
                 color=RMC_EMBED_COLOR,
                 timestamp=discord.utils.utcnow()
             )
             log_embed.add_field(
-                name="Выпущенный участник",
+                name="Возвратился",
                 value=f"{member.mention} | {member} | {member.id}",
                 inline=False
             )
             log_embed.add_field(
-                name="Модератор",
+                name="Возвратил",
                 value=f"{interaction.user.mention} | {interaction.user} | ({interaction.user.id})",
                 inline=False
             )
             log_embed.add_field(
-                name="Причина",
+                name="Причина возвращения",
                 value=f"```{unisolation_reason}```"
+            )
+            log_embed.add_field(
+                name="Причина изоляции",
+                value=f"`{reason}`"
+            )
+            
+            log_embed.add_field(
+                name="Дата изоляции",
+                value=f"{discord_time}"
             )
             await log_channel.send(embed=log_embed)
             
@@ -401,8 +445,70 @@ class Isolation(commands.Cog):
     #    else:
     #        return []
     #
+    @app_commands.command(
+        name="isolate_list",
+        description="Посмотреть список изолированных участников"
+    )
+    @app_commands.guild_only()
+    async def isolate_list(self, interaction: discord.Interaction):
 
+        if os.path.exists(isolated_users):
+            with open(isolated_users, 'r', encoding='utf-8') as f:
+                isolated_data = json.load(f)
+        else:
+            isolated_data = {}
 
+        embed = discord.Embed(
+            title="📋 Список изолированных участников",
+            color=RMC_EMBED_COLOR,
+            timestamp=discord.utils.utcnow()
+        )
+
+        await interaction.response.defer(ephemeral=True)
+
+        if isolated_data:
+            for user_id_str, user_data in isolated_data.items():  # Проходим по всем
+                user_id = int(user_id_str)
+                
+                # Получаем данные для КАЖДОГО пользователя
+                isolated_by = user_data.get("isolated_by")
+                reason = user_data.get("reason", "Не указана")
+                timestamp = user_data.get("isolated_at")
+                
+                # Форматируем время
+                if timestamp:
+                    discord_time = f"<t:{int(timestamp)}:d>"
+                else:
+                    discord_time = "Неизвестно"
+                
+                try:
+                    member = await interaction.guild.fetch_member(user_id)
+                    
+                    # Получаем модератора, если есть
+                    moderator_text = "Неизвестно"
+                    if isolated_by:
+                        try:
+                            moderator = await interaction.guild.fetch_member(int(isolated_by))
+                            moderator_text = moderator.mention
+                        except:
+                            moderator_text = f"<@{isolated_by}>"
+                    
+                    embed.add_field(
+                        name=f"{member.display_name}",
+                        value=f"Участник {member.mention} был изолирован {discord_time} модератором {moderator_text} по причине `{reason}`",
+                        inline=False
+                    )
+                except discord.NotFound:
+                    embed.add_field(
+                        name="❌ Неизвестный участник",
+                        value=f"ID: `{user_id}`\nПричина: `{reason}`\nВремя: {discord_time}",
+                        inline=False
+                    )
+            
+            await interaction.followup.send(embed=embed)
+        else:
+            embed.description = "✅ Изолированные участники отсутствуют"
+            await interaction.followup.send(embed=embed)
 
            
 
