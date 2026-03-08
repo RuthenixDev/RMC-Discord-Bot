@@ -1,11 +1,20 @@
 import discord
 from discord.ext import commands
 from discord.ui import Button, View
+from discord import app_commands
 from utils.permissions import check_cog_access
 from utils import settings_cache as settings
 from constants import RMC_EMBED_COLOR
 
-
+class CommandWrapper:
+    def __init__(self, name, description, cog, is_admin, is_slash=False):
+        self.name = name
+        self.description = description
+        self.cog = cog
+        self.hidden = False
+        self.is_admin = is_admin
+        self.is_slash = is_slash
+        
 class PaginatedHelpView(View):
     def __init__(self, command_chunks, author, admin_command_names=None, description=None):
         super().__init__(timeout=60)
@@ -43,7 +52,13 @@ class PaginatedHelpView(View):
         
         commands_list = self.command_chunks[self.current_page]
         for command in commands_list:
-            name = f"!rmc {command.name}"
+
+            if hasattr(command, 'is_slash') and command.is_slash:
+                prefix = "/"
+            else:
+                prefix = "!rmc "
+
+            name = f"{prefix}{command.name}"
             if command.name in self.admin_command_names:  # проверка по имени
                 name = "👑 " + name
             embed.add_field(
@@ -86,16 +101,55 @@ class HelpCmd(commands.Cog):
         description="Показывает список команд"
     )
     async def help(self, ctx: commands.Context):
-        # Собираем все команды
-        regular_commands  = []
+        # Собираем обычные команды
+        regular_commands = []
         admin_commands = []
+
         for command in self.bot.commands:
-            if command.hidden or command.name == "help":  # Пропускаем саму команду help
+            if command.hidden or command.name == "help":
                 continue
-            if hasattr(command.cog, 'required_access') and command.cog.required_access == "admin":
-                admin_commands.append(command)
+            
+            is_admin_cmd = hasattr(command.cog, 'required_access') and command.cog.required_access == "admin"
+            
+            wrapper = CommandWrapper(
+                name=command.name,
+                description=command.description or "Без описания",
+                cog=command.cog,
+                is_admin=is_admin_cmd,
+                is_slash=False  # обычные команды
+            )
+            
+            if is_admin_cmd:
+                admin_commands.append(wrapper)
             else:
-                regular_commands.append(command)
+                regular_commands.append(wrapper)
+
+        # Собираем чистые слэш-команды
+        for cmd in self.bot.tree.walk_commands():
+            # Пропускаем, если это гибридная команда (уже есть в bot.commands)
+            if any(c.name == cmd.name for c in self.bot.commands):
+                continue
+            
+            # Определяем, админская ли команда
+            is_admin_cmd = False
+            if hasattr(cmd, 'binding') and hasattr(cmd.binding, 'required_access'):
+                if cmd.binding.required_access == "admin":  # ✅ исправлено
+                    is_admin_cmd = True
+            
+            # Создаём обёртку
+            
+            wrapper = CommandWrapper(
+                name=cmd.name,
+                description=cmd.description or "Без описания",
+                cog=cmd.binding if hasattr(cmd, 'binding') else None,
+                is_admin=is_admin_cmd,
+                is_slash=True
+            )
+            
+            if is_admin_cmd:
+                admin_commands.append(wrapper)
+            else:
+                regular_commands.append(wrapper)
 
         user_roles = ctx.author.roles
 
@@ -110,7 +164,7 @@ class HelpCmd(commands.Cog):
         # Разбиваем на группы по 20 команд (оставляем запас)
 
         desc="Команды для админов помечены 👑" if is_admin else None
-        print(f"is_admin={is_admin}, desc={desc}")  # посмотри в консоль
+        #print(f"is_admin={is_admin}, desc={desc}") 
 
         chunk_size = 20
         command_chunks = [display_commands[i:i + chunk_size] 
