@@ -110,7 +110,7 @@ class ResponseModal(discord.ui.Modal, title="Ответ на сообщение"
         await self.view.disable_button(interaction)
 
 class Messaging(commands.Cog):
-    "Cog для отправки сообщений в ЛС участникам сервера от имени бота."
+    """Cog для отправки сообщений в ЛС участникам сервера от имени бота."""
     required_access = "admin"
 
     def __init__(self, bot: commands.Bot):
