@@ -23,6 +23,7 @@ print("✅ Healthcheck инициализирован")
 
 intents = discord.Intents.default()
 intents.message_content = True
+intents.members = True
 bot = commands.Bot(command_prefix="!rmc ", intents=intents, help_command=None)
 
 bot.load_errors = []       # список ошибок при загрузке когов

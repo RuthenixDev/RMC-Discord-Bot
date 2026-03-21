@@ -122,6 +122,13 @@ class Messaging(commands.Cog):
             raise commands.CheckFailure()
         return True
     
+    async def check_admin(self, interaction: discord.Interaction) -> bool:
+        """Проверяет, есть ли у пользователя админская роль"""
+        settings_data = settings.load_settings()
+        admin_roles = settings_data.get('admin_roles', [])
+        user_roles = [role.id for role in interaction.user.roles]
+        return any(role_id in admin_roles for role_id in user_roles)
+    
     @app_commands.command(
         name="dm_embed_user",
         description="Отправить личное embed-сообщение участнику"
@@ -143,6 +150,10 @@ class Messaging(commands.Cog):
     ])
     async def dm_embed_user(self, interaction: discord.Interaction, member: discord.Member, message: str, anonymous: int, allow_response: int = 0):
         
+        if not await self.check_admin(interaction):
+            await interaction.response.send_message("❌ Недостаточно прав", ephemeral=True)
+            return
+
         is_anonymous = bool(anonymous)
         is_allow_response = bool(allow_response)
         
@@ -282,6 +293,9 @@ class Messaging(commands.Cog):
         content = "Содержимое сообщения"
     )
     async def send_msg(self, interaction: discord.Interaction, channel: discord.TextChannel, content: str):
+        if not await self.check_admin(interaction):
+            await interaction.response.send_message("❌ Недостаточно прав", ephemeral=True)
+            return
 
         settings_data = settings.load_settings()
         channel_id = settings_data.get('log_channel')
@@ -410,6 +424,11 @@ class Messaging(commands.Cog):
         app_commands.Choice(name="Нет", value=0)
     ])
     async def send_embed(self, interaction: discord.Interaction, channel: discord.TextChannel, color: str, title: Optional[str], content: str, footer_content: Optional[str], embed_author: int, image_link: Optional[str] = None, ):
+        
+        if not await self.check_admin(interaction):
+            await interaction.response.send_message("❌ Недостаточно прав", ephemeral=True)
+            return
+        
         settings_data = settings.load_settings()
         channel_id = settings_data.get('log_channel')
         log_channel = interaction.guild.get_channel(channel_id) if channel_id else None 
@@ -596,6 +615,10 @@ class Messaging(commands.Cog):
         emoji = "Эмоджи для реакции"
     )
     async def react_on_msg(self, interaction: discord.Interaction, message_link: str, emoji: str):
+        if not await self.check_admin(interaction):
+            await interaction.response.send_message("❌ Недостаточно прав", ephemeral=True)
+            return
+        
         settings_data = settings.load_settings()
         channel_id = settings_data.get('log_channel')
         log_channel = interaction.guild.get_channel(channel_id) if channel_id else None 
@@ -700,6 +723,10 @@ class Messaging(commands.Cog):
         content = "Содержимое сообщения"
     )
     async def dm_user(self, interaction: discord.Interaction, member: discord.Member, content: str):
+        if not await self.check_admin(interaction):
+            await interaction.response.send_message("❌ Недостаточно прав", ephemeral=True)
+            return
+
 
         settings_data = settings.load_settings()
         channel_id = settings_data.get('log_channel')

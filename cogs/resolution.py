@@ -26,12 +26,23 @@ class Resolution(commands.Cog):
             raise commands.CheckFailure()
         return True
 
+    async def check_admin(self, interaction: discord.Interaction) -> bool:
+        """Проверяет, есть ли у пользователя админская роль"""
+        settings_data = settings.load_settings()
+        admin_roles = settings_data.get('admin_roles', [])
+        user_roles = [role.id for role in interaction.user.roles]
+        return any(role_id in admin_roles for role_id in user_roles)
+
     @app_commands.command(
         name="resolution",
         description="Создать резолюцию"
     )
     @app_commands.guild_only()
     async def resolution(self, interaction: discord.Interaction):
+        if not await self.check_admin(interaction):
+            await interaction.response.send_message("❌ Недостаточно прав", ephemeral=True)
+            return
+
         """Создать резолюцию"""
         modal = ResolutionModal(
             channel=interaction.channel,

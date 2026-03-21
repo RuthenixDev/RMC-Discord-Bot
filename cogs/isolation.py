@@ -25,6 +25,13 @@ class Isolation(commands.Cog):
             raise commands.CheckFailure()
         return True
     
+    async def check_admin(self, interaction: discord.Interaction) -> bool:
+        """Проверяет, есть ли у пользователя админская роль"""
+        settings_data = settings.load_settings()
+        admin_roles = settings_data.get('admin_roles', [])
+        user_roles = [role.id for role in interaction.user.roles]
+        return any(role_id in admin_roles for role_id in user_roles)
+    
     
     @app_commands.command(
         name="isolate_settings",
@@ -36,6 +43,9 @@ class Isolation(commands.Cog):
         #log_channel = "Канал для логов"
     )
     async def isolate_settings(self, interaction: discord.Interaction, isolation_role: Optional[discord.Role]):
+        if not await self.check_admin(interaction):
+            await interaction.response.send_message("❌ Недостаточно прав", ephemeral=True)
+            return
 
         settings_data = settings.load_settings()
 
@@ -118,6 +128,9 @@ class Isolation(commands.Cog):
         isolation_member = "Участник для изоляции",
     )
     async def isolate(self, interaction: discord.Interaction, isolation_member: discord.Member, isolation_reason: Optional[str]):
+        if not await self.check_admin(interaction):
+            await interaction.response.send_message("❌ Недостаточно прав", ephemeral=True)
+            return
 
         try:
             settings_data = settings.load_settings()
@@ -295,6 +308,9 @@ class Isolation(commands.Cog):
         unisolation_member = "Участник для помилования",
     )
     async def unisolate(self, interaction: discord.Interaction, unisolation_member: discord.Member, unisolation_reason: Optional[str] = None):
+        if not await self.check_admin(interaction):
+            await interaction.response.send_message("❌ Недостаточно прав", ephemeral=True)
+            return
 
         try:
             #member = interaction.guild.get_member(int(unisolation_member))
@@ -483,6 +499,9 @@ class Isolation(commands.Cog):
     )
     @app_commands.guild_only()
     async def isolate_list(self, interaction: discord.Interaction):
+        if not await self.check_admin(interaction):
+            await interaction.response.send_message("❌ Недостаточно прав", ephemeral=True)
+            return
 
         if os.path.exists(isolated_users):
             with open(isolated_users, 'r', encoding='utf-8') as f:

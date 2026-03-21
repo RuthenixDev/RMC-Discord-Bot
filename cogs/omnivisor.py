@@ -21,6 +21,13 @@ class Omnivisor(commands.Cog):
             raise commands.CheckFailure()
         return True
     
+    async def check_admin(self, interaction: discord.Interaction) -> bool:
+        """Проверяет, есть ли у пользователя админская роль"""
+        settings_data = settings.load_settings()
+        admin_roles = settings_data.get('admin_roles', [])
+        user_roles = [role.id for role in interaction.user.roles]
+        return any(role_id in admin_roles for role_id in user_roles)
+    
     async def find_first_message(self, member: discord.Member):
         """Пытается найти первое сообщение участника на сервере"""
         first_message = None
@@ -160,7 +167,7 @@ class Omnivisor(commands.Cog):
             
             user_info_embed.add_field(
                 name="📅 Даты",
-                value=f"Дата создания аккаунта: <t:{timestamp_created_at}:D> | Зашёл на сервер: <t:{timestamp_joined_at}:R>",
+                value=f"Дата создания аккаунта: <t:{timestamp_created_at}:D> | Зашёл на сервер: <t:{timestamp_joined_at}:D>",
                 inline=False
             )
             
@@ -177,7 +184,7 @@ class Omnivisor(commands.Cog):
             )
             
             user_info_embed.set_footer(
-                text=f"Автостатистика • {member.guild.name}"
+                text=f"Автостатистика"
             )
             
             content = role_mention if role_mention else None
@@ -186,7 +193,7 @@ class Omnivisor(commands.Cog):
             
         except Exception as e:
             # Логируем ошибку, но не прерываем основной процесс
-            log_channel.send(f"{role_mention}! Ошибка в автостатистике для {member.name}: {e}")
+            log_channel.send(f"{role_mention}! Ошибка в автостатистике для **{member.name}**: {e}")
     
 
     @app_commands.command(
@@ -203,6 +210,9 @@ class Omnivisor(commands.Cog):
         app_commands.Choice(name="Выключить", value=0)
     ])
     async def omnivisor_settings(self, interaction: discord.Interaction, role: Optional[discord.Role], auto_stat: Optional[int]):
+        if not await self.check_admin(interaction):
+            await interaction.response.send_message("❌ Недостаточно прав", ephemeral=True)
+            return
 
         settings_data = settings.load_settings()
 
@@ -250,12 +260,12 @@ class Omnivisor(commands.Cog):
                 changes.append(f"Роль {role.mention}")
                 needs_save = True
                 
-        if auto_stat:
+        if auto_stat is not None:  
             settings_data['auto_stat_enabled'] = auto_stat
             needs_save = True
             if auto_stat == 1:
                 changes.append("✅ Автостатистика включена")
-            if auto_stat == 0:
+            else:  # auto_stat == 0
                 changes.append("❌ Автостатистика выключена")
 
         if needs_save:
@@ -298,7 +308,9 @@ class Omnivisor(commands.Cog):
         app_commands.Choice(name="Выключить", value=0)
     ])
     async def user_info(self, interaction: discord.Interaction, member: discord.Member, count_status: Optional[int] = False):
-
+        if not await self.check_admin(interaction):
+            await interaction.response.send_message("❌ Недостаточно прав", ephemeral=True)
+            return
         
 
         try:
