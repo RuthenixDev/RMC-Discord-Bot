@@ -5,7 +5,10 @@ import healthcheck
 
 load_dotenv()
 TOKEN = os.getenv("TOKEN")
-print(f"TOKEN найден: {TOKEN}")
+if TOKEN:
+    print(f"TOKEN найден!")
+else:
+    print("Ошибка загрузки токена")
 COGS_DIR = "cogs"
 
 print("🚀 Старт main.py")
@@ -20,6 +23,7 @@ print("✅ Healthcheck инициализирован")
 
 intents = discord.Intents.default()
 intents.message_content = True
+intents.members = True
 bot = commands.Bot(command_prefix="!rmc ", intents=intents, help_command=None)
 
 bot.load_errors = []       # список ошибок при загрузке когов
