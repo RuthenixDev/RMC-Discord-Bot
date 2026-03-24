@@ -166,8 +166,8 @@ class Omnivisor(commands.Cog):
             timestamp_joined_at = int(member.joined_at.timestamp())
             
             user_info_embed.add_field(
-                name="📅 Даты",
-                value=f"Дата создания аккаунта: <t:{timestamp_created_at}:D> | Зашёл на сервер: <t:{timestamp_joined_at}:D>",
+                name="📅 Даты", #<t:{int(timestamp)}:d>
+                value=f"Дата создания аккаунта: <t:{timestamp_created_at}:d> | Зашёл на сервер: <t:{timestamp_joined_at}:d>",
                 inline=False
             )
             
@@ -354,7 +354,7 @@ class Omnivisor(commands.Cog):
 
             user_info_embed.add_field(
                 name="📅 Даты",
-                value=f"Дата создания аккаунта: <t:{timestamp_created_at}:D> | Дата захода на сервер: <t:{timestamp_joined_at}:D>",
+                value=f"Дата создания аккаунта: <t:{timestamp_created_at}:d> | Дата захода на сервер: <t:{timestamp_joined_at}:d>",
                 inline=False
             )
             first_message_info = await self.find_first_message(member)
