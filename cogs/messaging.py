@@ -445,6 +445,7 @@ class Messaging(commands.Cog):
             "🔘 Серый": discord.Color.lighter_grey(),
             "⚫ Тёмно-серый": discord.Color.darker_grey(),
             "🟡 Золотой": discord.Color.gold(),
+            "🩷 Бустерский": discord.Color.from_rgb(205, 76, 228),
             "🩵 Стандартный RMC_EMBED_COLOR": RMC_EMBED_COLOR
         }
 
