@@ -182,7 +182,7 @@ class Omnivisor(commands.Cog):
         
         user_info_embed.add_field(
             name="Участник",
-            value=f"Отображаемое имя: `{member.display_name}` | Глобальное имя: `{member.global_name or 'Нет'}` | ID: `{member.id}`",
+            value=f"Отображаемое имя: ```{member.display_name}``` | Глобальное имя: ```{member.global_name or 'Нет'}``` | ID: ```{member.id}```",
             inline=False
         )
         
@@ -384,13 +384,7 @@ class Omnivisor(commands.Cog):
             roles_text = ", ".join(role_mentions) if role_mentions else "❌ Нет ролей"
 
             if not log_channel:
-                embed = discord.Embed(
-                    title="❌ Ошибка",
-                    description="Канал для логов не настроен! Используйте `/set_log`",
-                    color=RMC_EMBED_COLOR
-                )
-                await interaction.response.send_message(embed=embed, ephemeral=True)
-                return
+                raise NoLogChannelError()
             
             await interaction.response.defer(ephemeral=True)
 
@@ -403,7 +397,7 @@ class Omnivisor(commands.Cog):
             )
             user_info_embed.add_field(
                 name="Участник",
-                value=f"Отображаемое имя: `{member.display_name}` | Глобальное имя: `{member.global_name}` | ID: `{member.id}`",
+                value=f"Отображаемое имя: ```{member.display_name}``` | Глобальное имя: ```{member.global_name or 'Нет'}``` | ID: ```{member.id}```",
                 inline=False
             )
             user_info_embed.add_field(
