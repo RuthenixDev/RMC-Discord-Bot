@@ -2,6 +2,7 @@ import discord
 import time
 from discord.ext import commands
 from discord import app_commands
+from utils.exceptions import NoLogChannelError
 from utils.permissions import check_cog_access
 from utils import settings_cache as settings
 from discord.ui import View, Button
@@ -117,6 +118,32 @@ class Omnivisor(commands.Cog):
 
         return count
     
+    async def send_stats_dm(self, target: discord.Member, new_member: discord.Member):
+        """Отправляет статистику о новом участнике в ЛС"""
+        
+        embed = discord.Embed(
+            title="📥 Новый участник на сервере",
+            description=f"На сервер зашёл {new_member.mention}",
+            color=RMC_EMBED_COLOR,
+            timestamp=discord.utils.utcnow()
+        )
+        
+        embed.add_field(
+            name="Участник",
+            value=f"Отображаемое имя: `{new_member.display_name}`\nID: `{new_member.id}`",
+            inline=False
+        )
+        
+        embed.add_field(
+            name="📅 Дата создания аккаунта",
+            value=f"<t:{int(new_member.created_at.timestamp())}:D>",
+            inline=False
+        )
+        
+        embed.set_footer(text=f"Автостатистика • {new_member.guild.name}")
+        
+        await target.send(embed=embed)
+    
     @commands.Cog.listener()
     async def on_member_join(self, member: discord.Member):
         """Автоматически собирает информацию о новом участнике, если включена автостатистика"""
@@ -127,73 +154,87 @@ class Omnivisor(commands.Cog):
         if auto_stat_enabled != 1:
             return  
         
-        channel_id = settings_data.get('log_channel')
-        if not channel_id:
-            return  
-        
-        log_channel = member.guild.get_channel(channel_id)
-        if not log_channel:
-            return
-        
+        dm_mode = settings_data.get('dm_mode', 0)
         role_id = settings_data.get('auto_stat_role_id')
+        
+        # Проверяем, есть ли роль для упоминания (если нужно)
         role_mention = f"<@&{role_id}>" if role_id else ""
         
-        try:
-            member_roles = [role for role in member.roles if not role.is_default() and not role.managed]
-            role_mentions = [role.mention for role in member_roles]
-            roles_text = ", ".join(role_mentions) if role_mentions else "❌ Нет ролей"
+        # Создаём embed с информацией
+        member_roles = [role for role in member.roles if not role.is_default() and not role.managed]
+        role_mentions = [role.mention for role in member_roles]
+        roles_text = ", ".join(role_mentions) if role_mentions else "❌ Нет ролей"
+
+        channel_id = settings_data.get('log_channel')
+        if not channel_id:
+            return
             
-            user_info_embed = discord.Embed(
-                title="📥 Новый участник на сервере",
-                description=f"Информация о новом участнике {member.mention}",
+        log_channel = member.guild.get_channel(channel_id)
+        if not log_channel:
+            raise NoLogChannelError()
+        
+        user_info_embed = discord.Embed(
+            title="📥 Новый участник на сервере",
+            description=f"Информация о новом участнике {member.mention}",
+            color=RMC_EMBED_COLOR,
+            timestamp=discord.utils.utcnow()
+        )
+        
+        user_info_embed.add_field(
+            name="Участник",
+            value=f"Отображаемое имя: `{member.display_name}` | Глобальное имя: `{member.global_name or 'Нет'}` | ID: `{member.id}`",
+            inline=False
+        )
+        
+        user_info_embed.add_field(
+            name="Роли участника",
+            value=roles_text,
+            inline=False
+        )
+        
+        timestamp_created_at = int(member.created_at.timestamp())
+        timestamp_joined_at = int(member.joined_at.timestamp())
+        
+        user_info_embed.add_field(
+            name="📅 Даты",
+            value=f"Дата создания аккаунта: <t:{timestamp_created_at}:d> | Зашёл на сервер: <t:{timestamp_joined_at}:d>",
+            inline=False
+        )
+        
+        user_info_embed.set_author(
+            name=member.display_name,
+            icon_url=member.avatar.url if member.avatar else None
+        )
+        
+        user_info_embed.set_footer(text="Автостатистика")
+        
+        # ✅ Раздельная логика в зависимости от dm_mode
+        if dm_mode == 1:
+            # Отправляем в ЛС пользователям с указанной ролью
+            role = member.guild.get_role(role_id) if role_id else None
+            if not role:
+                return
+            
+            for target in role.members:
+                try:
+                    # Отправляем embed в ЛС
+                    await target.send(embed=user_info_embed)
+                except discord.Forbidden:
+                    continue
+                except Exception as e:
+                    print(f"Ошибка отправки в ЛС {target}: {e}")
+            dm_log_embed = discord.Embed(
+                title="📤 Автостатистика отправлена в ЛС",
+                description=f"Информация о новом участнике {member.mention} отправлена в ЛС",
                 color=RMC_EMBED_COLOR,
                 timestamp=discord.utils.utcnow()
             )
-            
-            user_info_embed.add_field(
-                name="Участник",
-                value=f"Отображаемое имя: `{member.display_name}` | Глобальное имя: `{member.global_name or 'Нет'}` | ID: `{member.id}`",
-                inline=False
-            )
-            
-            user_info_embed.add_field(
-                name="Роли участника",
-                value=roles_text,
-                inline=False
-            )
-            
-            timestamp_created_at = int(member.created_at.timestamp())
-            timestamp_joined_at = int(member.joined_at.timestamp())
-            
-            user_info_embed.add_field(
-                name="📅 Даты", #<t:{int(timestamp)}:d>
-                value=f"Дата создания аккаунта: <t:{timestamp_created_at}:d> | Зашёл на сервер: <t:{timestamp_joined_at}:d>",
-                inline=False
-            )
-            
-            # first_message = await self.find_first_message(member)
-            # user_info_embed.add_field(
-            #     name="📝 Первое сообщение",
-            #     value=first_message,
-            #     inline=False
-            # )
-            
-            user_info_embed.set_author(
-                name=member.display_name,
-                icon_url=member.avatar.url if member.avatar else None
-            )
-            
-            user_info_embed.set_footer(
-                text=f"Автостатистика"
-            )
+            await log_channel.send(embed=dm_log_embed)
+        else:
+            # Отправляем в канал логов
             
             content = role_mention if role_mention else None
-            
             await log_channel.send(content=content, embed=user_info_embed)
-            
-        except Exception as e:
-            # Логируем ошибку, но не прерываем основной процесс
-            log_channel.send(f"{role_mention}! Ошибка в автостатистике для **{member.name}**: {e}")
     
 
     @app_commands.command(
@@ -203,30 +244,43 @@ class Omnivisor(commands.Cog):
     @app_commands.guild_only()
     @app_commands.describe(
         role = "Роль для упоминания при автостатистике",
-        auto_stat = "Статус автостатистики"
+        auto_stat = "Статус автостатистики",
+        dm_mode = "Режим отправки информации в ЛС выбранному модератору"
     )
     @app_commands.choices(auto_stat=[
         app_commands.Choice(name="Включить", value=1),
         app_commands.Choice(name="Выключить", value=0)
     ])
-    async def omnivisor_settings(self, interaction: discord.Interaction, role: Optional[discord.Role], auto_stat: Optional[int]):
+    @app_commands.choices(dm_mode=[
+        app_commands.Choice(name="Включить", value=1),
+        app_commands.Choice(name="Выключить", value=0)
+    ])
+    async def omnivisor_settings(self, interaction: discord.Interaction, role: Optional[discord.Role], auto_stat: Optional[int], dm_mode: Optional[int] = None):
         if not await self.check_admin(interaction):
             await interaction.response.send_message("❌ Недостаточно прав", ephemeral=True)
             return
 
         settings_data = settings.load_settings()
 
-        if role is None and auto_stat is None:
+
+        if role is None and auto_stat is None and dm_mode is None:
             saved_role_id = settings_data.get('auto_stat_role_id')
             role_object = interaction.guild.get_role(saved_role_id) if saved_role_id else None
-            role_text = role_object.mention if role_object else "❌Не настроена"
+            role_text = role_object.mention if role_object else "❌ Не настроена"
 
             auto_stat_enabled = settings_data.get('auto_stat_enabled')
             auto_stat_text = "✅ Включена" if auto_stat_enabled == 1 else "❌ Выключена"
+            
+            dm_mode_enabled = settings_data.get('dm_mode', 0)
+            dm_mode_text = "✅ Включён" if dm_mode_enabled == 1 else "❌ Выключен"
 
             embed = discord.Embed(
-                title="⚙️Сохранённые настройки",
-                description=f"В настройках сохранено следующее: \n - Роль упоминания: {role_text} \n - Статус автостатистики: {auto_stat_text}",
+                title="⚙️ Сохранённые настройки",
+                description=(
+                    f"**Роль упоминания:** {role_text}\n"
+                    f"**Автостатистика:** {auto_stat_text}\n"
+                    f"**DM-режим:** {dm_mode_text}"
+                ),
                 color=RMC_EMBED_COLOR,
                 timestamp=discord.utils.utcnow()
             )
@@ -267,6 +321,13 @@ class Omnivisor(commands.Cog):
                 changes.append("✅ Автостатистика включена")
             else:  # auto_stat == 0
                 changes.append("❌ Автостатистика выключена")
+        if dm_mode is not None:
+            settings_data['dm_mode'] = dm_mode
+            needs_save = True
+            if dm_mode == 1:
+                changes.append("✅ DM-режим включён")
+            else:
+                changes.append("❌ DM-режим выключен")
 
         if needs_save:
             settings.save_settings(settings_data)

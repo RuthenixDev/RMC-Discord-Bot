@@ -6,6 +6,7 @@ from datetime import datetime
 from typing import Optional, List
 from discord.ext import commands
 from discord import app_commands
+from utils.exceptions import NoLogChannelError
 from utils.permissions import check_cog_access
 from utils import settings_cache as settings
 from constants import RMC_EMBED_COLOR
@@ -131,6 +132,15 @@ class Isolation(commands.Cog):
         if not await self.check_admin(interaction):
             await interaction.response.send_message("❌ Недостаточно прав", ephemeral=True)
             return
+        if isolation_member == interaction.user:
+            embed = discord.Embed(
+                title="❌Ошибка при изоляции",  
+                description="Вы не можете изолировать себя!",
+                color=RMC_EMBED_COLOR,
+                timestamp=discord.utils.utcnow()
+            )
+            await interaction.response.send_message(embed=embed, ephemeral=True)
+            return
 
         try:
             settings_data = settings.load_settings()
@@ -152,15 +162,7 @@ class Isolation(commands.Cog):
                 await interaction.response.send_message(embed=embed, ephemeral=True)
                 return
             if not log_channel:
-                embed = discord.Embed(
-                    title="❌Ошибка",
-                    description="Не назначен канал для логов",
-                    color=RMC_EMBED_COLOR,
-                    timestamp=discord.utils.utcnow()
-                )
-                embed.set_footer(text="Для настройки используйте /set_log.")
-                await interaction.response.send_message(embed=embed, ephemeral=True)
-                return
+                raise NoLogChannelError()
 
             try:
                 #получаем его роли
@@ -337,15 +339,7 @@ class Isolation(commands.Cog):
                 await interaction.response.send_message(embed=embed, ephemeral=True)
                 return
             if not log_channel:
-                embed = discord.Embed(
-                    title="❌Ошибка",
-                    description="Не назначен канал для логов",
-                    color=RMC_EMBED_COLOR,
-                    timestamp=discord.utils.utcnow()
-                )
-                embed.set_footer(text="Для настройки используйте /isolate_settings.")
-                await interaction.response.send_message(embed=embed, ephemeral=True)
-                return
+                raise NoLogChannelError()
             
             await interaction.response.defer(ephemeral=True)
             
@@ -403,7 +397,7 @@ class Isolation(commands.Cog):
                 await interaction.followup.send(embed=response_embed, ephemeral=True)
 
                 log_embed = discord.Embed(
-                    title="Участник бьл возвращён",
+                    title="Участник был возвращён",
                     color=RMC_EMBED_COLOR,
                     timestamp=discord.utils.utcnow()
                 )

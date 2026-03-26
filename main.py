@@ -1,7 +1,10 @@
 import discord, os, traceback
 from discord.ext import commands
+from discord import app_commands  
 from dotenv import load_dotenv
+from constants import RMC_EMBED_COLOR
 import healthcheck
+from utils.exceptions import NoLogChannelError
 
 load_dotenv()
 TOKEN = os.getenv("TOKEN")
@@ -76,6 +79,46 @@ async def on_command_error(ctx, error):
         return
 
     raise error
+@bot.event
+async def on_app_command_error(interaction: discord.Interaction, error: app_commands.AppCommandError):
+    """Обработчик ошибок для слэш-команд"""
+    
+    if isinstance(error, app_commands.CommandOnCooldown):
+        await interaction.response.send_message(
+            f"⏳ Команда на кулдауне. Попробуй через {error.retry_after:.1f} секунд.",
+            ephemeral=True
+        )
+        return
+    
+    if isinstance(error, app_commands.MissingPermissions):
+        await interaction.response.send_message(
+            "❌ У вас нет прав для использования этой команды.",
+            ephemeral=True
+        )
+        return
+    
+    if isinstance(error, app_commands.CheckFailure):
+        await interaction.response.send_message(
+            "❌ У вас нет прав для этого раздела команд. Если вы считаете это ошибкой, свяжитесь с администратором.",
+            ephemeral=True
+        )
+        return
+    
+    if isinstance(error, NoLogChannelError):    
+        error_embed = discord.Embed(
+            title="❌ Ошибка",
+            description="Канал для логов не настроен. Пожалуйста, настройте канал с помощью команды `/set_log`.",
+            color=RMC_EMBED_COLOR
+        )
+        await interaction.response.send_message(embed=error_embed, ephemeral=True)
+        return
+    
+    print(f"Необработанная ошибка в слэш-команде: {error}")
+    await interaction.response.send_message(
+        "❌ Произошла ошибка при выполнении команды. Попробуйте позже.",
+        ephemeral=True
+    )
+
 
 
 

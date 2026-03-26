@@ -2,6 +2,7 @@ import discord
 import time
 from discord.ext import commands
 from discord import app_commands
+from utils.exceptions import NoLogChannelError
 from utils.permissions import check_cog_access
 from utils import settings_cache as settings
 from discord.ui import View, Button
@@ -174,13 +175,7 @@ class Messaging(commands.Cog):
             log_channel = interaction.guild.get_channel(channel_id) if channel_id else None 
 
             if not log_channel:
-                embed = discord.Embed(
-                    title="❌ Ошибка",
-                    description=f"У бота не настроен канал для логов! Воспользуйтесь `/set_log`",
-                    color=RMC_EMBED_COLOR
-                )
-                await interaction.response.send_message(embed=embed, ephemeral=True)
-                return
+                raise NoLogChannelError()
 
             dm_message = discord.Embed(
                 title="📨 Вам сообщение!",
@@ -259,15 +254,7 @@ class Messaging(commands.Cog):
                 )
                 await log_channel.send(embed=log_message)
             else:
-                embed = discord.Embed(
-                    title="❌ Ошибка",
-                    description=f"У бота не настроен канал для логов!",
-                    color=RMC_EMBED_COLOR
-                )
-                embed.set_footer(
-                    text="Для настройки используйте `/set_log`"
-                )
-                await interaction.response.send_message(embed=embed, ephemeral=True)
+                raise NoLogChannelError()
         except discord.Forbidden:
             embed = discord.Embed(
                 title="❌ Ошибка",
@@ -316,14 +303,7 @@ class Messaging(commands.Cog):
         discord_time = f"<t:{int(timestamp)}:d>"
 
         if not log_channel:
-            embed = discord.Embed(
-                title="❌ Ошибка",
-                description="У бота не настроен канал для логов!",
-                color=RMC_EMBED_COLOR
-            )
-            embed.set_footer(text="Для настройки используйте `/set_log`")
-            await interaction.response.send_message(embed=embed, ephemeral=True)
-            return
+            raise NoLogChannelError()
 
         try:
             log_embed = discord.Embed(
@@ -475,7 +455,8 @@ class Messaging(commands.Cog):
         content = "Содержимое embed",
         image_link = "Ссылка на картинку (опционально)",
         footer_content = "Содержимое футера с указанием автора",
-        embed_author = "Указать себя как автора"
+        embed_author = "Указать себя как автора",
+        timestamp_on = "Включить временную метку",
     )
     @app_commands.autocomplete(color=color_autocomplete)
     #@app_commands.choices(color=[
@@ -490,7 +471,11 @@ class Messaging(commands.Cog):
         app_commands.Choice(name="Да", value=1),
         app_commands.Choice(name="Нет", value=0)
     ])
-    async def send_embed(self, interaction: discord.Interaction, channel: discord.TextChannel, color: str, title: Optional[str], content: str, footer_content: Optional[str], embed_author: int, image_link: Optional[str] = None, ):
+    @app_commands.choices(timestamp_on=[
+        app_commands.Choice(name="Да", value=1),
+        app_commands.Choice(name="Нет", value=0)
+    ])
+    async def send_embed(self, interaction: discord.Interaction, channel: discord.TextChannel, color: str, title: Optional[str], timestamp_on: int, content: str, footer_content: Optional[str], embed_author: int, image_link: Optional[str] = None, ):
         
         if not await self.check_admin(interaction):
             await interaction.response.send_message("❌ Недостаточно прав", ephemeral=True)
@@ -504,6 +489,7 @@ class Messaging(commands.Cog):
         discord_time = f"<t:{int(timestamp)}:d>"
 
         embed_author_bool = bool(embed_author)
+        timestamp_on_bool = bool(timestamp_on)  
 
         #color_map = {
         #    "red": discord.Color.red(),
@@ -611,13 +597,16 @@ class Messaging(commands.Cog):
                     name="👨‍💼 Указание авторства",
                     value="✅ Да" if embed_author_bool else "❌ Нет"
                 )
-
                 send_embed = discord.Embed(
                     title=title if title else "",
-                    description=f"{content}",
-                    color=embed_color,
-                    timestamp=discord.utils.utcnow()
+                    description=content,
+                    color=embed_color
                 )
+                if timestamp_on_bool:
+                    send_embed.timestamp = discord.utils.utcnow()
+                    log_embed.add_field(name="⏰ Временная метка", value="✅ Да")
+                else:
+                    log_embed.add_field(name="⏰ Временная метка", value="❌ Нет")
                 if footer_content:
                     send_embed.set_footer(
                         text=footer_content,
@@ -646,15 +635,7 @@ class Messaging(commands.Cog):
                 await interaction.response.send_message(embed=embed, ephemeral=True)
                 await log_channel.send(embed=log_embed)
             else:
-                embed = discord.Embed(
-                    title="❌ Ошибка",
-                    description=f"У бота не настроен канал для логов!",
-                    color=RMC_EMBED_COLOR
-                )
-                embed.set_footer(
-                    text="Для настройки используйте `/set_log`"
-                )
-                await interaction.response.send_message(embed=embed, ephemeral=True)
+                raise NoLogChannelError()
         except discord.Forbidden:
             embed = discord.Embed(
                 title="❌ Ошибка",
@@ -770,15 +751,7 @@ class Messaging(commands.Cog):
                 await interaction.response.send_message(embed=embed, ephemeral=True)
                 return 
         else:    
-            embed = discord.Embed(
-                title="❌ Ошибка",
-                description=f"У бота не настроен канал для логов!",
-                color=RMC_EMBED_COLOR
-            )
-            embed.set_footer(
-                text="Для настройки используйте `/set_log`"
-            )
-            await interaction.response.send_message(embed=embed, ephemeral=True)
+            raise NoLogChannelError()
 
     @app_commands.command(
         name="dm_user",
@@ -838,15 +811,7 @@ class Messaging(commands.Cog):
                 await interaction.response.send_message(embed=embed, ephemeral=True)
                 await log_channel.send(embed=log_embed)
             else:
-                embed = discord.Embed(
-                    title="❌ Ошибка",
-                    description=f"У бота не настроен канал для логов!",
-                    color=RMC_EMBED_COLOR
-                )
-                embed.set_footer(
-                    text="Для настройки используйте `/set_log`"
-                )
-                await interaction.response.send_message(embed=embed, ephemeral=True)
+                raise NoLogChannelError()
         except discord.Forbidden:
             embed = discord.Embed(
                 title="❌ Ошибка",
