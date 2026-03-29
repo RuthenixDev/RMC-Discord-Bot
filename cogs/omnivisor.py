@@ -7,6 +7,7 @@ from discord import app_commands
 from utils.permissions import check_cog_access
 from utils import settings_cache as settings
 from utils import omnivisor_db
+from utils.exceptions import NoLogChannelError
 from discord.ui import View, Button
 from typing import Optional
 from constants import RMC_EMBED_COLOR
