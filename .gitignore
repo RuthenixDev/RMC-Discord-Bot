@@ -3,3 +3,4 @@ settings.json
 *.pyc
 RMC-Discord-Bot.code-workspace
 isolated_users.json
+omnivisor.db
