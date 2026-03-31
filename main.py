@@ -79,7 +79,7 @@ async def on_command_error(ctx, error):
         return
 
     raise error
-@bot.event
+@bot.tree.error
 async def on_app_command_error(interaction: discord.Interaction, error: app_commands.AppCommandError):
     """Обработчик ошибок для слэш-команд"""
     
@@ -110,7 +110,10 @@ async def on_app_command_error(interaction: discord.Interaction, error: app_comm
             description="Канал для логов не настроен. Пожалуйста, настройте канал с помощью команды `/set_log`.",
             color=RMC_EMBED_COLOR
         )
-        await interaction.response.send_message(embed=error_embed, ephemeral=True)
+        if interaction.response.is_done():
+            await interaction.followup.send(embed=error_embed, ephemeral=True)
+        else:
+            await interaction.response.send_message(embed=error_embed, ephemeral=True)
         return
     
     print(f"Необработанная ошибка в слэш-команде: {error}")
