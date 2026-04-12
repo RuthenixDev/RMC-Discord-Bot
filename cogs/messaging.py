@@ -794,7 +794,7 @@ class Messaging(commands.Cog):
                 )
                 log_embed.add_field(
                     name="Целевой участник",
-                    value=f"{member.mention}",
+                    value=f"{member.mention} ({member.id})",
                     inline=True
                 )
                 log_embed.add_field(

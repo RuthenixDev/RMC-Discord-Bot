@@ -185,6 +185,8 @@ class Isolation(commands.Cog):
             return
 
         try:
+            
+            
             settings_data = settings.load_settings()
             role_id = settings_data.get('isolation_role_id')
             channel_id = settings_data.get('log_channel')
@@ -208,6 +210,7 @@ class Isolation(commands.Cog):
                         isolation_member_roles.append(role)
 
                 role_ids = [role.id for role in isolation_member_roles]
+                member = isolation_member 
                 user_id = str(isolation_member.id)
                 admin_roles = settings_data.get('admin_roles', [])
 
@@ -256,12 +259,12 @@ class Isolation(commands.Cog):
                     log_embed = self._create_embed("Участник был изолирован")
                     log_embed.add_field(
                         name="Изолирован",
-                        value=f"{isolation_member.mention} | {isolation_member} | {isolation_member.id}",
+                        value=f"{member.mention} \n `{member}` \n `{member.id}`",
                         inline=False
                     )
                     log_embed.add_field(
                         name="Изолировал",
-                        value=f"{interaction.user.mention} | {interaction.user} | {interaction.user.id}",
+                        value=f"{interaction.user.mention} \n `{interaction.user}` \n `{interaction.user.id}`",
                         inline=False
                     )
                     log_embed.add_field(
