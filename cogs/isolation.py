@@ -174,19 +174,32 @@ class Isolation(commands.Cog):
     @app_commands.describe(
         isolation_member="Участник для изоляции",
     )
-    async def isolate(self, interaction: discord.Interaction, isolation_member: discord.Member, isolation_reason: Optional[str]):
+    async def isolate(self, interaction: discord.Interaction, isolation_member: discord.User, isolation_reason: Optional[str]):
         if not await self.check_admin(interaction):
             await interaction.response.send_message("❌ Недостаточно прав", ephemeral=True)
             return
 
-        if isolation_member == interaction.user:
+        if isolation_member.id == interaction.user.id:
             embed = self._create_embed("❌Ошибка при изоляции", "Вы не можете изолировать себя!")
             await interaction.response.send_message(embed=embed, ephemeral=True)
             return
 
         try:
+            await interaction.response.defer(ephemeral=True)
             
-            
+            user_id = str(isolation_member.id)
+            user_fetched = await self.bot.fetch_user(isolation_member.id)
+            user_name = user_fetched.global_name or user_fetched.name
+            member = interaction.guild.get_member(isolation_member.id)
+
+            isolated_data = await self._load_isolated_data()
+
+            if user_id in isolated_data:
+                embed = self._create_embed("❌Ошибка", "Пользователь уже изолирован!")
+                embed.set_footer(text="Проверьте список изолированных пользователей через /isolate_list.")
+                await interaction.followup.send(embed=embed, ephemeral=True)
+                return
+
             settings_data = settings.load_settings()
             role_id = settings_data.get('isolation_role_id')
             channel_id = settings_data.get('log_channel')
@@ -200,98 +213,77 @@ class Isolation(commands.Cog):
             if not isolation_role:
                 embed = self._create_embed("❌Ошибка", "Не назначена роль изоляции!")
                 embed.set_footer(text="Для настройки используйте /isolate_settings.")
-                await interaction.response.send_message(embed=embed, ephemeral=True)
+                await interaction.followup.send(embed=embed, ephemeral=True)
                 return
+
+            role_ids = []
             
-            try:
+            if member:
+                admin_roles = settings_data.get('admin_roles', [])
                 isolation_member_roles = []
-                for role in isolation_member.roles:
+                
+                for role in member.roles:
                     if not role.is_default() and not role.managed and role != isolation_role:
+                        if role.id in admin_roles:
+                            embed = self._create_embed(
+                                "❌Ошибка при изоляции", 
+                                "У выбранного участника есть роль, которая отмечена как административная."
+                            )
+                            await interaction.followup.send(embed=embed, ephemeral=True)
+                            return
                         isolation_member_roles.append(role)
 
                 role_ids = [role.id for role in isolation_member_roles]
-                member = isolation_member 
-                user_id = str(isolation_member.id)
-                admin_roles = settings_data.get('admin_roles', [])
 
-                if any(role_id in admin_roles for role_id in role_ids):
-                    embed = self._create_embed(
-                        "❌Ошибка при изоляции", 
-                        "У выбранного участника есть роль, которая отмечена как административная."
-                    )
-                    embed.set_footer(text="Для просмотра списка — /listadmins.")
-                    await interaction.response.send_message(embed=embed, ephemeral=True)
-                    return
-
-                isolated_data = await self._load_isolated_data()
-
-                if user_id in isolated_data:
-                    embed = self._create_embed("❌Ошибка при изоляции", "Выбранный участник уже изолирован!")
-                    await interaction.response.send_message(embed=embed, ephemeral=True)
-                    return
-                else:
-                    isolated_data[user_id] = IsolatedUser(
-                        roles=role_ids,
-                        isolated_at=time.time(),
-                        isolated_by=interaction.user.id,
-                        reason=isolation_reason if isolation_reason else "Не указана"
-                    )
-                    await self._save_isolated_data(isolated_data)
-
-                await interaction.response.defer(ephemeral=True)
                 if isolation_member_roles:
-                    await isolation_member.remove_roles(*isolation_member_roles)
-    
-                await isolation_member.add_roles(isolation_role, reason=f"Изолирован {interaction.user} по причине «{isolation_reason}».")
-                
-                response_embed = self._create_embed("✅Успешная изоляция", f"Участник {isolation_member.mention} изолирован!")
-                
-                if isolation_reason:
-                    response_embed.add_field(name="Причина", value=f"{isolation_reason}")
-                else:
-                    response_embed.add_field(name="Причина", value="❌Причина не указана")
-                
-                await interaction.followup.send(embed=response_embed, ephemeral=True)
+                    await member.remove_roles(*isolation_member_roles)
+                await member.add_roles(isolation_role, reason=f"Изолирован {interaction.user}: {isolation_reason}")
 
-                if log_channel:
-                    user_data = isolated_data[user_id]
-                    
-                    log_embed = self._create_embed("Участник был изолирован")
-                    log_embed.add_field(
-                        name="Изолирован",
-                        value=f"{member.mention} \n `{member}` \n `{member.id}`",
-                        inline=False
-                    )
-                    log_embed.add_field(
-                        name="Изолировал",
-                        value=f"{interaction.user.mention} \n `{interaction.user}` \n `{interaction.user.id}`",
-                        inline=False
-                    )
-                    log_embed.add_field(
-                        name="Причина",
-                        value=f"```{user_data.reason}```"
-                    )
-                    log_embed.add_field(
-                        name="Дата изоляции",
-                        value=f"{user_data.formatted_time}",
-                        inline=True
-                    )
-                    await log_channel.send(embed=log_embed)
+            isolated_data[user_id] = IsolatedUser(
+                roles=role_ids,
+                isolated_at=time.time(),
+                isolated_by=interaction.user.id,
+                reason=isolation_reason if isolation_reason else "Не указана"
+            )
+            await self._save_isolated_data(isolated_data)
+            
+            status_text = "изолирован" if member else "изолирован заочно"
+            response_embed = self._create_embed("✅Успешная изоляция", f"Пользователь {isolation_member.mention} {status_text}!")
+            response_embed.add_field(name="Причина", value=isolation_reason if isolation_reason else "❌Причина не указана")
+            await interaction.followup.send(embed=response_embed, ephemeral=True)
 
-            except discord.Forbidden:
-                embed = self._create_embed("❌Ошибка при изоляции", "У бота недостаточно прав для изоляции")
-                if not interaction.response.is_done():
-                    await interaction.response.send_message(embed=embed, ephemeral=True)
-                else:
-                    await interaction.followup.send(embed=embed, ephemeral=True)
-                return
+            if log_channel:
+                user_data = isolated_data[user_id]
+                log_embed = self._create_embed("Пользователь был изолирован")
+                log_embed.add_field(
+                    name="Изолирован",
+                    value=f"<@{user_id}> **{user_name}**\nID: `{user_id}`\n",
+                    inline=False
+                )
+                log_embed.add_field(
+                    name="Изолировал",
+                    value=f"{interaction.user.mention}\n`{interaction.user.id}`",
+                    inline=False
+                )
+                log_embed.add_field(
+                    name="Причина",
+                    value=f"```{user_data.reason}```"
+                )
+                log_embed.add_field(
+                    name="Дата изоляции",
+                    value=f"{user_data.formatted_time}",
+                    inline=True
+                )
+                await log_channel.send(embed=log_embed)
+
         except NoLogChannelError:
-            raise
+            if not interaction.response.is_done():
+                await interaction.response.send_message("❌ Не настроен канал логов!", ephemeral=True)
+            else:
+                await interaction.followup.send("❌ Не настроен канал логов!", ephemeral=True)
         except Exception as e:
-            print(f"ОШИБКА в isolate: {e}")
             import traceback
             traceback.print_exc()
-            
             if not interaction.response.is_done():
                 await interaction.response.send_message(f"❌ Ошибка: {e}", ephemeral=True)
             else:
@@ -299,10 +291,9 @@ class Isolation(commands.Cog):
         
     @commands.Cog.listener()
     async def on_member_join(self, member: discord.Member):
-        """Возвращает участника в изолятор при попытке обхода через перезаход на сервер."""
+        """Возвращает участника в изолятор (авто-возврат или заочная изоляция)."""
         
         user_id = str(member.id)
-        
         isolated_data = await self._load_isolated_data() 
         
         if user_id in isolated_data:
@@ -311,10 +302,19 @@ class Isolation(commands.Cog):
             time_text = user_data.formatted_time
             isolated_by = user_data.isolated_by  
 
+            is_preemptive = len(user_data.roles) == 0
+
+            title_text = "🔒 Применение заочной изоляции" if is_preemptive else "⚠️ Попытка обхода изоляции"
+            description_text = (
+                f"Пользователь {member.mention} зашёл на сервер и получил ранее назначенную роль изоляции."
+                if is_preemptive else
+                f"Пользователь {member.mention} попытался снять изоляцию через перезаход, роль была возвращена."
+            )
+
+            # Ищем модератора
             moderator_text = "Неизвестно"
             if isolated_by:
                 moderator = member.guild.get_member(int(isolated_by))
-                
                 if not moderator:
                     try:
                         moderator = await member.guild.fetch_member(int(isolated_by))
@@ -330,16 +330,18 @@ class Isolation(commands.Cog):
                 isolation_role = member.guild.get_role(role_id)
                 if isolation_role:
                     try:
-                        await member.add_roles(isolation_role, reason="Автоматический возврат изоляции после перезахода.")
+                        # Выдаем роль
+                        await member.add_roles(isolation_role, reason="Автоматическая изоляция при входе.")
 
+                        # Логируем
                         channel_id = settings_data.get('log_channel')
                         if channel_id:
                             log_channel = member.guild.get_channel(channel_id)
                             if log_channel:
-                                
+                                # Создаем эмбед ОДИН раз с правильными данными
                                 warning_embed = self._create_embed(
-                                    title="⚠️ Попытка обхода изоляции",
-                                    description=f"Пользователь {member.mention} попытался снять изоляцию через перезаход на сервер, но роль была возвращена.",
+                                    title=title_text,
+                                    description=description_text,
                                 )
                                 warning_embed.add_field(
                                     name="Пользователь",
@@ -347,16 +349,19 @@ class Isolation(commands.Cog):
                                     inline=False
                                 )
                                 warning_embed.add_field(
-                                    name="Модератор",
-                                    value=moderator_text
-                                )
-                                warning_embed.add_field(
-                                    name="Причина изоляции",
-                                    value=f"`{reason}`"
+                                    name="Изолировал",
+                                    value=moderator_text,
+                                    inline=True
                                 )
                                 warning_embed.add_field(
                                     name="Дата изоляции",
-                                    value=f"{time_text}"
+                                    value=time_text,
+                                    inline=True
+                                )
+                                warning_embed.add_field(
+                                    name="Причина",
+                                    value=f"```{reason}```",
+                                    inline=False
                                 )
 
                                 await log_channel.send(embed=warning_embed)
@@ -366,26 +371,31 @@ class Isolation(commands.Cog):
 
     @app_commands.command(
         name="unisolate",
-        description="Вернуть участника из изолятора"
+        description="Вернуть участника из изолятора (поддерживает ID)"
     )
     @app_commands.guild_only()
     @app_commands.describe(
-        unisolation_member="Участник для помилования",
+        unisolation_user="Выберите пользователя из списка или введите его ID",
+        unisolation_reason="Причина снятия изоляции"
     )
-    async def unisolate(self, interaction: discord.Interaction, unisolation_member: discord.Member, unisolation_reason: Optional[str] = None):
+    async def unisolate(self, interaction: discord.Interaction, unisolation_user: str, unisolation_reason: Optional[str] = None):
         if not await self.check_admin(interaction):
             await interaction.response.send_message("❌ Недостаточно прав", ephemeral=True)
             return
 
         try:
-            member = unisolation_member 
-            user_id = str(member.id)
+            # 1. Пытаемся получить ID из введенной строки
+            try:
+                user_id_int = int(unisolation_user.strip())
+                user_id_str = str(user_id_int)
+            except ValueError:
+                await interaction.response.send_message("❌ Неверный формат ID. Введите число.", ephemeral=True)
+                return
 
             settings_data = settings.load_settings()
-
-            isolate_role = settings_data.get('isolation_role_id')
-            role_object = interaction.guild.get_role(isolate_role) if isolate_role else None
-
+            isolate_role_id = settings_data.get('isolation_role_id')
+            role_object = interaction.guild.get_role(isolate_role_id) if isolate_role_id else None
+            
             channel_id = settings_data.get('log_channel')
             log_channel = interaction.guild.get_channel(channel_id) if channel_id else None 
 
@@ -393,8 +403,7 @@ class Isolation(commands.Cog):
                 raise NoLogChannelError()
 
             if not role_object:
-                embed = self._create_embed("❌Ошибка", "Не назначена роль изоляции!")
-                embed.set_footer(text="Для настройки используйте /isolate_settings.")
+                embed = self._create_embed("❌ Ошибка", "Не назначена роль изоляции в настройках!")
                 await interaction.response.send_message(embed=embed, ephemeral=True)
                 return
             
@@ -402,120 +411,114 @@ class Isolation(commands.Cog):
             
             isolated_data = await self._load_isolated_data()
 
-            if user_id in isolated_data:
-                user_data = isolated_data[user_id]
-                
+            # Проверяем, есть ли пользователь в базе данных
+            if user_id_str not in isolated_data:
+                embed = self._create_embed("❌ Ошибка", "Этот пользователь не числится в списке изолированных.")
+                await interaction.followup.send(embed=embed, ephemeral=True)
+                return
+
+            user_data = isolated_data[user_id_str]
+            
+            # Пытаемся найти участника на сервере (member может быть None, если он вышел)
+            member = interaction.guild.get_member(user_id_int)
+            # Если get_member не нашел, пробуем fetch_member (запрос к API)
+            if not member:
+                try:
+                    member = await interaction.guild.fetch_member(user_id_int)
+                except:
+                    member = None
+
+            # 2. Логика восстановления ролей, если пользователь на сервере
+            if member:
                 roles_to_restore = []
-                for role_id in user_data.roles:
-                    role = interaction.guild.get_role(role_id)
-                    if role:
+                # Предполагаем, что user_data — это объект или словарь с атрибутом roles
+                # Если это словарь, используйте user_data['roles']
+                stored_roles = getattr(user_data, 'roles', []) 
+                
+                for r_id in stored_roles:
+                    role = interaction.guild.get_role(r_id)
+                    if role and role.id != role_object.id:
                         roles_to_restore.append(role)
 
-                await member.remove_roles(role_object, reason=f"Модератор {interaction.user} снял изоляцию по причине {unisolation_reason}")
+                try:
+                    await member.remove_roles(role_object, reason=f"Снятие изоляции: {unisolation_reason}")
+                    if roles_to_restore:
+                        await member.add_roles(*roles_to_restore, reason=f"Восстановление ролей: {unisolation_reason}")
+                except discord.Forbidden:
+                    # Если у бота нет прав управлять ролями этого юзера
+                    pass
 
-                if roles_to_restore:
-                    await member.add_roles(*roles_to_restore, reason=f"Модератор {interaction.user} снял изоляцию по причине {unisolation_reason}")
+            # 3. Удаляем из базы данных в любом случае
+            del isolated_data[user_id_str]
+            await self._save_isolated_data(isolated_data)
 
-                del isolated_data[user_id]
-                await self._save_isolated_data(isolated_data)
+            # Формируем ответ
+            mention_str = member.mention if member else f"Пользователь с ID `{user_id_str}`"
+            
+            response_embed = self._create_embed(
+                "✅ Успешное возращение",
+                f"Пользователь {mention_str} удален из списка изоляции."
+            )
+            response_embed.add_field(name="Причина возвращения", value=unisolation_reason or "Не указана")
+            await interaction.followup.send(embed=response_embed, ephemeral=True)
 
-                response_embed = self._create_embed(
-                    "✅Успешное возвращение",
-                    f"Участник {member.mention} был возвращён из изолятора!"
-                )
-                
-                if unisolation_reason:
-                    response_embed.add_field(name="Причина", value=f"{unisolation_reason}")
-                else:
-                    response_embed.add_field(name="Причина", value="❌Причина не указана")
-                
-                await interaction.followup.send(embed=response_embed, ephemeral=True)
+            # Логгирование
+            log_embed = self._create_embed("Участник был возвращён")
+            log_embed.add_field(
+                name="Пользователь",
+                value=f"{mention_str}\nID: `{user_id_str}`",
+                inline=False
+            )
+            log_embed.add_field(name="Кем возвращён", value=interaction.user.mention, inline=True)
+            
+            # Безопасное получение времени
+            iso_time = getattr(user_data, 'formatted_time', 'Неизвестно')
+            log_embed.add_field(name="Дата изоляции", value=iso_time, inline=True)
+            log_embed.add_field(name="Причина возвращения", value=f"```{unisolation_reason or 'Не указана'}```", inline=False)
+            
+            await log_channel.send(embed=log_embed)
 
-                log_embed = self._create_embed("Участник был возвращён")
-                log_embed.add_field(
-                    name="Возвратился",
-                    value=f"{member.mention} \n `{member}` \n `{member.id}`",
-                    inline=False
-                )
-                log_embed.add_field(
-                    name="Возвратил",
-                    value=f"{interaction.user.mention} \n `{interaction.user}` \n `{interaction.user.id}`",
-                    inline=False
-                )
-                log_embed.add_field(
-                    name="Причина возвращения",
-                    value=f"```{unisolation_reason}```"
-                )
-                log_embed.add_field(
-                    name="Причина изоляции",
-                    value=f"`{user_data.reason}`"
-                )
-                log_embed.add_field(
-                    name="Дата изоляции",
-                    value=f"{user_data.formatted_time}"
-                )
-                
-                await log_channel.send(embed=log_embed)
-
-            else:
-                embed = self._create_embed("❌Ошибка при возвращении из изоляции", "Выбранный участник ещё не изолирован!")
-                
-                if not interaction.response.is_done():
-                    await interaction.response.send_message(embed=embed, ephemeral=True)
-                else:
-                    await interaction.followup.send(embed=embed, ephemeral=True)
-                return
         except NoLogChannelError:
-            raise         
+            if interaction.response.is_done():
+                await interaction.followup.send("❌ Ошибка: не настроен канал логов.", ephemeral=True)
+            else:
+                await interaction.response.send_message("❌ Ошибка: не настроен канал логов.", ephemeral=True)
         except Exception as e:
-            print(f"ОШИБКА в unisolate: {e}")
             import traceback
             traceback.print_exc()
-            
-            if not interaction.response.is_done():
-                await interaction.response.send_message(f"❌ Ошибка: {e}", ephemeral=True)
+            msg = f"❌ Критическая ошибка: {e}"
+            if interaction.response.is_done():
+                await interaction.followup.send(msg, ephemeral=True)
             else:
-                await interaction.followup.send(f"❌ Ошибка: {e}", ephemeral=True)
-    #@unisolate.autocomplete("unisolation_member") Я ТОПТАЛ ЭТО ГОВНО ЭТОТ КОД ДОЛЖЕН ВЫВОДИТЬ ТОЛЬКО ИЗОЛИРОВАННЫХ УЧАСТНИКОВ НО ОН ЧМО ТУПОРЫЛОЕ Я ПИСАЛ ЭТО ЧАСИК 
-    #async def isolated_autocomplete(self, interaction: discord.Interaction, current: str,) -> List[app_commands.Choice[str]]:
-#
-    #    if os.path.exists(isolated_users):
-    #        try:
-    #            with open(isolated_users, 'r', encoding='utf-8') as f:
-    #                isolated_data = json.load(f)
-    #        except json.JSONDecodeError:
-    #            return []
-    #        
-    #        choices = []
-#
-    #        for user_id in isolated_data.keys():
-#
-    #            try:
-    #                all_members = await interaction.guild.fetch_members(limit=None).flatten()
-    #                for member in all_members:
-    #                    if str(member.id) not in isolated_data:
-    #                        continue
-    #                    if current.lower() in member.display_name.lower():
-    #                        choices.append(app_commands.Choice(name=member.display_name, value=str(member.id)))
-    #            except discord.NotFound:
-    #                continue
-    #            except discord.Forbidden:
-    #                continue
-#
-    #            if member is None:
-    #                continue
-    #            if current.lower() in member.display_name.lower():
-    #                choices.append(
-    #                    app_commands.Choice(
-    #                        name=member.display_name,
-    #                        value=str(member.id),
-    #                    )
-    #                )
-    #        return choices[:25]
-#
-    #    else:
-    #        return []
-    #
+                await interaction.response.send_message(msg, ephemeral=True)
+
+    @unisolate.autocomplete("unisolation_user")
+    async def isolated_autocomplete(self, interaction: discord.Interaction, current: str) -> List[app_commands.Choice[str]]:
+        choices = []
+        if not os.path.exists(isolated_users):
+            return []
+
+        try:
+            async with aiofiles.open(isolated_users, mode='r', encoding='utf-8') as f:
+                content = await f.read()
+                isolated_data = json.loads(content) if content else {}
+        except:
+            return []
+
+        for user_id_str in isolated_data.keys():
+            user_id = int(user_id_str)
+            member = interaction.guild.get_member(user_id)
+            
+            if member:
+                label = f"{member.display_name} (@{member.name})"
+            else:
+                label = f"Вне сервера (ID: {user_id_str})"
+
+            if current.lower() in label.lower() or current in user_id_str:
+                choices.append(app_commands.Choice(name=label, value=user_id_str))
+
+        return choices[:25]
+
     @app_commands.command(
         name="isolate_list",
         description="Посмотреть список изолированных участников"
