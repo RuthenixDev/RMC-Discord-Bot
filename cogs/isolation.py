@@ -457,7 +457,7 @@ class Isolation(commands.Cog):
             
             response_embed = self._create_embed(
                 "✅ Успешное возращение",
-                f"Пользователь {mention_str} удален из списка изоляции."
+                f"Пользователь {mention_str} был возвращён из изоляции."
             )
             response_embed.add_field(name="Причина возвращения", value=unisolation_reason or "Не указана")
             await interaction.followup.send(embed=response_embed, ephemeral=True)
