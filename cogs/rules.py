@@ -1,12 +1,315 @@
 import discord
+import os
+import json
+import aiofiles
+import time
+from datetime import datetime
 from typing import Optional
 from discord import app_commands
+from discord.ui import View, Button
 from discord.ext import commands
 from constants import RMC_EMBED_COLOR
 from utils.permissions import check_cog_access
+from utils import settings_cache as settings
+from utils.exceptions import NoLogChannelError
+
+class RulesAdminView(discord.ui.View):
+    def __init__(self, cog):
+        super().__init__(timeout=None)
+        self.cog = cog
+
+    @discord.ui.button(label="Добавить", style=discord.ButtonStyle.success, emoji="➕")
+    async def add_rule_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        modal = AddRuleModal(self.cog)
+        await interaction.response.send_modal(modal)
+
+    @discord.ui.button(label="Изменить", style=discord.ButtonStyle.primary, emoji="✏️")
+    async def edit_rule_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        modal = EditRuleModal(self.cog)
+        await interaction.response.send_modal(modal)
+
+    @discord.ui.button(label="Удалить", style=discord.ButtonStyle.danger, emoji="🗑️")
+    async def delete_rule_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        modal = DeleteRuleModal(self.cog)
+        await interaction.response.send_modal(modal)
+
+    @discord.ui.button(label="Системные", style=discord.ButtonStyle.secondary, emoji="⚙️")
+    async def system_items_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        view = discord.ui.View()
+        select = discord.ui.Select(placeholder="Выберите системный раздел для правки...")
+        
+        select.add_option(label="Основа", value="basis", emoji="📜")
+        select.add_option(label="Система наказаний", value="punishment_system", emoji="⚖️")
+        select.add_option(label="Ссылка на правила", value="link", emoji="🔗")
+
+        async def select_callback(select_interaction: discord.Interaction):
+            modal = EditSystemItemModal(self.cog, select.values[0])
+            await select_interaction.response.send_modal(modal)
+
+        select.callback = select_callback
+        view.add_item(select)
+        
+        await interaction.response.send_message("Какой раздел вы хотите отредактировать?", view=view, ephemeral=True)
+    
+class EditSystemItemModal(discord.ui.Modal):
+    def __init__(self, cog, sys_id: str):
+        titles = {
+            "basis": "Редактирование: Основа",
+            "punishment_system": "Редактирование: Наказания",
+            "link": "Редактирование: Ссылка"
+        }
+        super().__init__(title=titles.get(sys_id, "Системный раздел"))
+        self.cog = cog
+        self.sys_id = sys_id
+        self.title_input = discord.ui.TextInput(
+            label="Заголовок раздела",
+            placeholder="Например: Основа / Правила сервера",
+            max_length=100,
+            required=False 
+        )
+        self.text_input = discord.ui.TextInput(
+            label="Содержание",
+            style=discord.TextStyle.paragraph,
+            placeholder="Введите текст раздела...",
+            max_length=2000,
+            required=False
+        )
+        
+        self.add_item(self.title_input)
+        self.add_item(self.text_input)
+
+    async def on_submit(self, interaction: discord.Interaction):
+        try:
+            data = await self.cog._load_rules_data()
+            if "system_items" not in data:
+                data["system_items"] = {}
+            
+            current = data["system_items"].get(self.sys_id, {"title": "", "text": ""})
+
+            new_title = self.title_input.value.strip() or current['title']
+            new_text = self.text_input.value.strip() or current['text']
+
+            data["system_items"][self.sys_id] = {
+                "title": new_title,
+                "text": new_text
+            }
+
+            await self.cog._log_rule_change(
+                interaction, 
+                f"Системный раздел ({self.sys_id})", 
+                0, 
+                new_title, 
+                new_text
+            )
+
+            await self.cog._save_rules_data(data)
+
+            await interaction.response.send_message(f"✅ Раздел «{new_title}» успешно обновлен!", ephemeral=True)
+
+        except NoLogChannelError:
+            await interaction.response.send_message("❌ Ошибка: Не настроены логи.", ephemeral=True)
+
+class AddRuleModal(discord.ui.Modal, title="➕Добавление правила"):
+    number = discord.ui.TextInput(
+        label="Номер правила",
+        placeholder="Например: 17 (действует автосдвиг)",
+        min_length=1,
+        max_length=2
+    )
+    rule_title = discord.ui.TextInput(
+        label="Заголовок правила",
+        placeholder="Введите краткое название...",
+        max_length=100
+    )
+    rule_text = discord.ui.TextInput(
+        label="Текст правила",
+        placeholder="Введите полный текст правила...",
+        style=discord.TextStyle.paragraph,
+        max_length=2000
+    )
+
+    def __init__(self, cog):
+        super().__init__()
+        self.cog = cog
+
+    async def on_submit(self, interaction: discord.Interaction):
+        try:
+            if not self.number.value.isdigit():
+                await interaction.response.send_message("❌Номер правила должен быть числом!", ephemeral=True)
+                return
+            
+            target_pos = int(self.number.value)
+            data = await self.cog._load_rules_data()
+            rules = data.get("rules", [])
+
+            new_rule = {
+                "title": self.rule_title.value,
+                "text": self.rule_text.value
+            }
+
+            idx = max(0, min(target_pos - 1, len(rules)))
+            rules.insert(idx, new_rule)
+
+            data["rules"] = rules
+
+            await self.cog._log_rule_change(
+                interaction,
+                "Добавление",
+                target_pos,
+                self.rule_title.value,
+                self.rule_text.value
+            )
+
+            await self.cog._save_rules_data(data)
+
+            response_embed = discord.Embed(
+                title=f"✅ Правило №{target_pos} добавлено успешно!",
+                description=f"**{self.rule_title.value}**\n\n{self.rule_text.value}",
+                color=RMC_EMBED_COLOR
+            )
+
+            await interaction.response.send_message(embed=response_embed, ephemeral=True)
+
+        except NoLogChannelError:
+            if not interaction.response.is_done():
+                await interaction.response.send_message("❌ Ошибка: Не настроен канал логов. Изменения не сохранены.", ephemeral=True)
+            else:
+                await interaction.followup.send("❌ Ошибка: Не настроен канал логов. Изменения не сохранены.", ephemeral=True)
+        except Exception as e:
+            print(f"Ошибка в AddRuleModal: {e}")
+            if not interaction.response.is_done():
+                await interaction.response.send_message(f"❌ Произошла ошибка: {e}", ephemeral=True)
+
+class EditRuleModal(discord.ui.Modal, title="✏️Изменение правила"):
+    number = discord.ui.TextInput(
+        label="Номер правила",
+        placeholder="Например: 17 (действует автосдвиг)",
+        min_length=1,
+        max_length=2
+    )
+    rule_title = discord.ui.TextInput(
+        label="Новый заголовок",
+        placeholder="Введите новое краткое название...",
+        max_length=100,
+        required=False
+    )
+    rule_text = discord.ui.TextInput(
+        label="Новый текст правила",
+        placeholder="Введите новый полный текст правила...",
+        style=discord.TextStyle.paragraph,
+        max_length=2000,
+        required=False
+    )
+
+    def __init__(self, cog):
+        super().__init__()
+        self.cog = cog
+
+    async def on_submit(self, interaction: discord.Interaction):
+        try:
+            val = self.number.value.strip()
+            if not val.isdigit():
+                await interaction.response.send_message("❌Номер правила должен быть числом!", ephemeral=True)
+                return
+            
+            target_pos = int(val)
+            idx = target_pos - 1
+
+            data = await self.cog._load_rules_data()
+            rules = data.get("rules", [])
+
+            if idx < 0 or idx >= len(rules):
+                await interaction.response.send_message(f"❌ Правила под номером {target_pos} не существует!", ephemeral=True)
+                return
+            
+            current_rule = rules[idx]
+            new_title = self.rule_title.value.strip() or current_rule['title']
+            new_text = self.rule_text.value.strip() or current_rule['text']
+            
+            await self.cog._log_rule_change(
+                interaction,
+                "Редактирование",
+                target_pos,
+                self.rule_title.value,
+                self.rule_text.value
+            )
+
+            rules[idx] = {
+                "title": new_title,
+                "text": new_text
+            }
+
+            data["rules"] = rules
+
+            await self.cog._save_rules_data(data)
+
+            response_embed = discord.Embed(
+                title=f"✅ Правило №{target_pos} успешно изменено!",
+                description=f"**{new_title}**\n\n{new_text}",
+                color=discord.Color.blue()
+            )
+
+            await interaction.response.send_message(embed=response_embed, ephemeral=True)
+            
+        except NoLogChannelError:
+            if not interaction.response.is_done():
+                await interaction.response.send_message("❌ Ошибка: Не настроен канал логов. Изменения не сохранены.", ephemeral=True)
+            else:
+                await interaction.followup.send("❌ Ошибка: Не настроен канал логов. Изменения не сохранены.", ephemeral=True)
+        except Exception as e:
+            print(f"Ошибка в EditRuleModal: {e}")
+            if not interaction.response.is_done():
+                await interaction.response.send_message(f"❌ Произошла ошибка: {e}", ephemeral=True)
+
+class DeleteRuleModal(discord.ui.Modal, title="🗑️Удаление правила"):
+    number = discord.ui.TextInput(
+        label="Номер правила",
+        placeholder="Введите номер правила для удаления...",
+        min_length=1,
+        max_length=2
+    )
+
+    def __init__(self, cog):
+        super().__init__()
+        self.cog = cog
+
+    async def on_submit(self, interaction:discord.Interaction):
+        try:
+            val = self.number.value.strip()
+            if not val.isdigit():
+                await interaction.response.send_message("❌ Введите число!", ephemeral=True)
+                return
+            
+            target_pos = int(val)
+            idx = target_pos - 1
+            
+            data = await self.cog._load_rules_data()
+            rules = data.get("rules", [])
+
+            if idx < 0 or idx >= len(rules):
+                await interaction.response.send_message(f"❌ Правило №{target_pos} не найдено!", ephemeral=True)
+                return
+
+            deleted_rule = rules[idx]
+
+            await self.cog._log_rule_change(
+                interaction, 
+                "Удаление", 
+                target_pos, 
+                deleted_rule['title']
+            )
+
+            rules.pop(idx)
+            data["rules"] = rules
+
+            await self.cog._save_rules_data(data)
+            await interaction.response.send_message(f"🗑️ Правило №{target_pos} успешно удалено!", ephemeral=True)
+
+        except NoLogChannelError:
+            await interaction.response.send_message("❌ Ошибка: Логи не настроены.", ephemeral=True)
+
 
 class Rules(commands.Cog):
-    """Cog для просмотра правил сервера."""
     required_access = None
 
     async def cog_check(self, ctx: commands.Context):
@@ -17,171 +320,153 @@ class Rules(commands.Cog):
 
     def __init__(self, bot: commands.Bot):
         self.bot = bot
-        self.rule_names = {
-            "1": "Краши и фишинговые ссылки",
-            "2": "Реклама", 
-            "3": "NSFW шок-контент",
-            "4": "Оскорбления",
-            "5": "Критика",
-            "6": "Обсуждение политики",
-            "7": "Спам и флуд",
-            "8": "Призывы к насилию",
-            "9": "Акции от имени РМК",
-            "10": "Выдача себя за другое лицо",
-            "11": "Поиск неточностей в правилах",
-            "12": "О других аккаунтах участника",
-            "13": "О критике администрации",
-            "14": "О личных сообщениях администрации",
-            "15": "О действиях администрации",
-            "16": "Распространение ложных сведений и дискредитация РМК",
-            "17": "Обман Администрации",
-            "basis": "Право администрации на самостоятельное принятие решений",
-            "link": "Ссылка на полные правила"
-        }
 
-    @commands.hybrid_command(
-        name="rule",
-        with_app_command=True,
-        description="Посмотреть пункт правил сервера."
+    async def check_admin(self, interaction: discord.Interaction) -> bool:
+        settings_data = settings.load_settings()
+        admin_roles = settings_data.get('admin_roles', [])
+        user_roles = [role.id for role in interaction.user.roles]
+        return any(role_id in admin_roles for role_id in user_roles)
+
+    async def _load_rules_data(self):
+        if not os.path.exists("rules.json"):
+            return {"edit_date": None, "rules": [], "system_items": {}}
+        try:
+            async with aiofiles.open("rules.json", mode='r', encoding='utf-8') as f: 
+                content = await f.read()
+                if content:
+                    data = json.loads(content)
+                    if "system_items" not in data:
+                        data["system_items"] = {}
+                    if "rules" not in data:
+                        data["rules"] = []
+                    return data
+                return {"edit_date": None, "rules": [], "system_items": {}}
+        except (json.JSONDecodeError, Exception) as e:
+            print(f"Ошибка при загрузке правил: {e}")
+            return {"edit_date": None, "rules": [], "system_items": {}}
+        
+    async def _save_rules_data(self, data: dict):
+        data["edit_date"] = time.time()
+        async with aiofiles.open("rules.json", mode='w', encoding='utf-8') as f:
+            await f.write(json.dumps(data, indent=4, ensure_ascii=False))
+
+    async def _log_rule_change(self, interaction: discord.Interaction, action: str, rule_id: int, title: str, text: Optional[str] = None): 
+        settings_data = settings.load_settings()
+        log_channel_id = settings_data.get("log_channel")
+        if not log_channel_id:
+            raise NoLogChannelError()
+        log_channel = interaction.guild.get_channel(log_channel_id) if log_channel_id else None 
+        if not log_channel:
+            raise NoLogChannelError()
+        log_rule_embed = discord.Embed(
+            title=f"📝 Изменение правил: {action}",
+            color=RMC_EMBED_COLOR,
+            timestamp=discord.utils.utcnow()
+        )
+        log_rule_embed.add_field(name="Модератор", value=f"{interaction.user.mention}  `{interaction.user.id}`", inline=True)
+        log_rule_embed.add_field(name="ID правила", value=f"#{rule_id}", inline=True)
+        log_rule_embed.add_field(name="Заголовок", value=title, inline=False)
+
+        if text:
+            display_text = text if len(text) <= 1024 else text[:1021] + "..."
+            log_rule_embed.add_field(name="Текст правила", value=display_text, inline=False)
+
+        await log_channel.send(embed=log_rule_embed)
+
+    @app_commands.command(
+        name="rule_edit",
+        description="Управление правилами сервера."
     )
-    @app_commands.describe(rule_id="Выберите пункт правил")
-    @app_commands.choices(rule_id=[
-        app_commands.Choice(name="Справка о команде", value="help"),
-        app_commands.Choice(name="1. Попытки взлома, краши и фишинговые ссылки", value="1"),
-        app_commands.Choice(name="2. Реклама", value="2"),
-        app_commands.Choice(name="3. NSFW и шок-контент", value="3"),
-        app_commands.Choice(name="4. Оскорбления", value="4"),
-        app_commands.Choice(name="5. Критика", value="5"),
-        app_commands.Choice(name="6. Обсуждение политики", value="6"),
-        app_commands.Choice(name="7. Спам, пасты и флуд", value="7"),
-        app_commands.Choice(name="8. Призывы к насилию", value="8"),
-        app_commands.Choice(name="9. Акции от имени РМК", value="9"),
-        app_commands.Choice(name="10. Выдача себя за другое лицо", value="10"),
-        app_commands.Choice(name="11. Поиск неточностей в правилах", value="11"),
-        app_commands.Choice(name="12. О других аккаунтах участника", value="12"),
-        app_commands.Choice(name="13. Критика действий администрации", value="13"),
-        app_commands.Choice(name="14. Публичное обсуждение действий администрации", value="14"),
-        app_commands.Choice(name="15. Личные сообщения администрации", value="15"),
-        app_commands.Choice(name="16. Распространение ложных сведений и дискредитация РМК", value="16"),
-        app_commands.Choice(name="17. Обман администрации", value="17"),
-        app_commands.Choice(name="Право администрации на самостоятельное принятие решений", value="basis"),
-        app_commands.Choice(name="Система наказаний", value="punishment_system"),
-        app_commands.Choice(name="Ссылка на полные правила", value="link")
-    ])
-    async def rule(self, ctx: commands.Context, rule_id: Optional[str] = None):
-        """Показать пункт правил по номеру или help."""
+    @app_commands.guild_only()
+    async def rule_edit(self, interaction: discord.Interaction):
+        if not await self.check_admin(interaction):
+            await interaction.response.send_message("❌ Недостаточно прав", ephemeral=True)
+            return
+        
+        data = await self._load_rules_data()
+        rules = data.get("rules", [])
+        edit_date = data.get("edit_date")
 
-        rules_map = {
-            "help": "Доступно для ввода: `help`, пункты правил 1-17, `basis`, `link`.",
-            "1": "1. Любые попытки взлома, краша, рейда сервера, размещения фишинговых ссылок, вредоносного ПО и прочих материалов сомнительного содержания караются перманентным баном.",
-            "2": "2. Запрещена любая реклама без разрешения администрации сервера.",
-            "3": "3. Запрещены шок-контент, NSWF-контент порнография, демонстрация насилия и прочий контент, нарушающий общепризнанные моральные нормы. За подобные действие, как правило, сразу будет следовать бан.",
-            "4": "4. Запрещены систематические оскорбления/поток оскорблений, угрозы в адрес участников сообщества, связанных с ними людей, модов и проектов, игровых проектов, ютуб-каналов и т.д. Единичное оскорбление также может рассматриваться как нарушение правил.",
-            "5": "5. Обоснованная и конструктивная критика приветствуется, если диалог ведётся корректно. Необоснованные агрессивные высказывания являются нарушением.",
-            "6": "6. Все политические и политизированные обсуждения, дискуссии и срачи запрещены повсеместно, за исключением отдельного канала <#1329815969937358849>, доступ в который выдаётся специальной ролью <@&1331710911068504125>. Если разговор сложился таким образом или на подобную тему, то следует перейти в данный канал. Все остальные правила в данном канале сохраняют свою силу.",
-            "7": "7. Спам, флуд, пасты, попрошайничество, непрерывный капс, а равно иные действия, приравненные к таковым Администрацией, запрещены. Запрещён и является более тяжким проступком необоснованный массовый пинг.",
-            "8": "8. Запрещаются действия, направленные на разжигание ненависти, вражды, а также на унижение достоинства человека либо группы лиц по национальному, расовому, религиозному признакам, а также в связи с принадлежностью к какой-либо социальной группе. Запрещаются провокации и призывы к насилию, терроризму, войне.",
-            "9": "9. Запрещены любые акции от имени РМК без ведома и согласия администрации РМК.",
-            "10": "10. Запрещено выдавать себя за другого человека без его ведома и согласия. Запрещено распространение личной информации других людей, а также личных сведений, порочащих их.",
-            "11": "11. Не приветствуется намеренный поиск и использование лазеек в правилах. Любые махинации с толкованием текста правил не будут рассматриваться как аргумент.",
-            "12": "12. Наказание распространяется на все аккаунты участника. Администрация вправе банить сомнительные аккаунты без объяснения причины. Они могут быть разблокированы лишь при подтверждении действительности их владельца или в порядке апелляции.",
-            "13": "13. Каждый член Администрации не обязан терпеть неконструктивную критику и оскорбления в свой адрес, в адрес сервера или администрации и вправе применить наказание.",
-            "14": "14. Действия администрации не подлежат публичному обсуждению. Обжалование осуществляется индивидуально в апелляционном порядке.",
-            "15": "15. Члены Администрации не обязаны отвечать на личные сообщения.",
-            "16": "16. Распространение заведомо ложных сведений, дискредитирующих РМК, а равно совершение иных действий, направленных на причинение вреда РМК, является нарушением независимо от места совершения. Наказание может быть назначено и соучастникам. ",
-            "17": "17. Запрещены действия, целью которых является обман Администрации, совершённые из корыстных или иных низменных побуждений.",
-            "basis": "Администрация имеет право самой выбирать меру наказания в зависимости от тяжести нарушения. Администрация сохраняет за собой право выносить наказание без объяснения причины и отсылки на определённые правила, а также не применять наказания в тех случаях, когда посчитает это нужным.",
-            "punishment_system": "При нарушении кем-либо из участников данных правил администрация сервера имеет право вынести наказание на своё усмотрение. Предыдущие прецеденты могут быть приняты либо не приняты во внимание.\n\n- По всем правилам в качестве санкции может применяться весь перечень возможных наказаний, если иное не предусмотрено самим правилом.\n- Любой наказанный может подать апелляцию, где должен обосновать свою точку зрения.\n- В случае возникновения споров по факту нарушения между участниками представитель администрации выступает арбитром.\n\nПомимо стандартных наказаний, на сервере действует система предупреждений (варнов). Существует устное и настоящие предупреждения. При первом факте нарушения правил, по факту нарушения которых может выноситься предупреждение, администрация выдаёт устное предупреждение. Если оно игнорируется, то за ним следует либо настоящее, либо мут.\n\n Любое следующее нарушение карается настоящим предупреждением. На третье настоящее предупреждение происходит автоматический бан сроком на месяц, остаётся возможность подачи апелляции, а также досрочного разбана на усмотрение администрации. Срок истечения каждого одного варна - 2 недели, но этот срок может быть продлён администрацией.",
-            "link": "https://discord.com/channels/1283116690678485125/1283118892880887868"
-        }
+        time_str = f"<t:{int(edit_date)}:R>" if edit_date else "Никогда"
 
-        if rule_id is None or rule_id == "help":
-            embed = discord.Embed(
-                title="📖 Справка по команде rule",
-                description="Доступные пункты правил:",
-                color=RMC_EMBED_COLOR
-            )
-            
-            for i in range(1, 18):
-                rule_key = str(i)
-                rule_name = self.rule_names.get(rule_key, f"Правило {i}")
-                embed.add_field(
-                    name=f"📜 {rule_name}",
-                    value=f"Используйте `!rmc rule {i}` или `/rule {i}`",
-                    inline=True  
-                )
-            
-            embed.add_field(
-                name="⚖️ " + self.rule_names.get("basis", "Основа основ"),
-                value="`!rmc rule basis` или `/rule basis`",
-                inline=True
-            )
+        description = ""
+        for i, rule in enumerate(rules, 1):
+            description += f"**{i}.** {rule['title']}\n"
 
-            embed.add_field(
-                name="📃 " + self.rule_names.get("punishment_system", "Система наказаний"),
-                value="`!rmc rule punishment_system` или `/rule punishment_system`",
-                inline=True
-            )
+        if not description: 
+            description = "Правила ещё не созданы"
+
+        embed = discord.Embed(
+            title="🛠️ Настройка правил сервера",
+            description=description,
+            timestamp=discord.utils.utcnow(),
+            color=RMC_EMBED_COLOR
+        )
+        embed.set_footer(text=f"Последнее изменение: {time_str}")
+
+        await interaction.response.send_message(
+            embed=embed,
+            view=RulesAdminView(self),
+            ephemeral=True
+        )
+
+    @app_commands.command(name="rule", description="Показать пункт правил")
+    @app_commands.describe(item="Выберите пункт правил")
+    #@app_commands.autocomplete(item=rule_autocomplete)
+    async def rule(self, interaction: discord.Interaction, item: str):
+        data = await self._load_rules_data()
+        
+        if item.startswith("sys_"):
+            sys_id = item.replace("sys_", "")
+            content = data.get("system_items", {}).get(sys_id)
             
-            embed.add_field(
-                name="🔗 " + self.rule_names.get("link", "Ссылка на правила"),
-                value="`!rmc rule link` или `/rule link`",
-                inline=True
-            )
-            
-            embed.set_footer(text="Выберите нужный пункт для просмотра подробного описания. Версия правил от 05.01.2026")
-            await ctx.send(embed=embed)
+            if sys_id == "basis":
+                title = f"📜 {content['title']}"
+                footer = "Администрация оставляет за собой право трактовать правила"
+            elif sys_id == "punishment_system":
+                title = f"⚖️ {content['title']}"
+                footer = "Администрация оставляет за собой право не следовать установленной системе"
+            else:
+                title = f"🔗 {content['title']}"
+                footer = "Полная версия правил доступна по ссылке"
+        else:
+            rules = data.get("rules", [])
+            idx = int(item) - 1
+            content = rules[idx] if 0 <= idx < len(rules) else None
+            title = f"📍 Правило №{item}: {content['title']}"
+            footer = "Соблюдайте правила сервера!"
+
+        if not content:
+            await interaction.response.send_message("❌ Пункт не найден", ephemeral=True)
             return
 
-        answer = rules_map.get(rule_id)
-        if answer:
-            if rule_id.isdigit():
-                rule_name = self.rule_names.get(rule_id, f"Правило {rule_id}")
-                title = f"📜 {rule_name}"
-                color = RMC_EMBED_COLOR
-            elif rule_id == "basis":
-                rule_name = self.rule_names.get("basis", "Основа основ")
-                title = f"⚖️ {rule_name}"
-                color = RMC_EMBED_COLOR
-            elif rule_id == "punishment_system":
-                rule_name = self.rule_names.get(rule_id, "Система наказаний")
-                title = f"📃 {rule_name}"
-                color = RMC_EMBED_COLOR
-            else:  
-                rule_name = self.rule_names.get("link", "Ссылка на правила")
-                title = f"🔗 {rule_name}"
-                color = RMC_EMBED_COLOR
-            
-            embed = discord.Embed(
-                title=title,
-                description=answer,
-                color=color,
-                timestamp=discord.utils.utcnow()
-            )
-            
-            if rule_id.isdigit():
-                embed.set_footer(text="Соблюдайте правила сервера!")
-            elif rule_id == "basis":
-                embed.set_footer(text="Администрация оставляет за собой право трактовать правила")
-            elif rule_id == "punishment_system":
-                embed.set_footer(text="Администрация оставляет за собой право не следовать установленной системе")
-            else:
-                embed.set_footer(text="Полная версия правил доступна по ссылке")
-            
-            await ctx.send(embed=embed)
-        else:
-            embed = discord.Embed(
-                title="❌ Ошибка",
-                description=f"Такого пункта нет в правилах!",
-                color=RMC_EMBED_COLOR
-            )
-            
-            embed.set_footer(text="Используйте !rmc rule help для справки по правилам.")
+        embed = discord.Embed(
+            title=title,
+            description=content['text'],
+            color=RMC_EMBED_COLOR,
+            timestamp=discord.utils.utcnow()
+        )
+        embed.set_footer(text=footer)
+        await interaction.response.send_message(embed=embed)
 
-            if ctx.interaction is not None:
-                await ctx.send(embed=embed, ephemeral=True)
-            else:
-                await ctx.send(embed=embed)
+    @rule.autocomplete("item")
+    async def rule_autocomplete(self, interaction: discord.Interaction, current: str) -> list[app_commands.Choice[str]]:
+        data = await self._load_rules_data()
+        choices = []
+        
+        sys_items = data.get("system_items", {})
+        for sys_id, item in sys_items.items():
+            label = f"⚙️ {item['title']}"
+            if current.lower() in label.lower():
+                choices.append(app_commands.Choice(name=label, value=f"sys_{sys_id}"))
+
+        rules = data.get("rules", [])
+        for i, rule in enumerate(rules, 1):
+            label = f"{i}. {rule['title']}"
+            if current.lower() in label.lower():
+                choices.append(app_commands.Choice(name=label, value=str(i)))
+                
+        return choices[:25]
 
 async def setup(bot: commands.Bot):
     await bot.add_cog(Rules(bot))
