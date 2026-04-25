@@ -1,13 +1,135 @@
 import discord
 import time
+import re
+import io
+import openpyxl
+from datetime import datetime
+from dataclasses import dataclass, asdict
 from discord.ext import commands
 from discord import app_commands
 from utils.exceptions import NoLogChannelError
 from utils.permissions import check_cog_access
 from utils import settings_cache as settings
 from discord.ui import View, Button
-from typing import Optional
+from typing import Optional, List
 from constants import RMC_EMBED_COLOR
+from isolation import IsolatedUser
+
+BOT_NAME_REGEX = re.compile(r"^[a-zA-Z]+\d{4,5}$", re.IGNORECASE)
+
+
+async def evaluate_suspicion(member: discord.Member) -> tuple[float, list]:
+    score = 0.0
+    reasons = []
+
+    account_age_seconds = (discord.utils.utcnow() - member.created_at).total_seconds()
+
+    if account_age_seconds < 86400:
+        score += 2
+        reasons.append("Аккаунту меньше 24 часов (+2)")
+    elif 86400 <= account_age_seconds <= 259200:
+        score += 1
+        reasons.append("Аккаунту от 1 до 3 дней (+1)")
+
+    if member.avatar is None:
+        score += 1
+        reasons.append("У аккаунта стандартный аватар (+1)")
+    elif member.avatar.is_animated():
+        score -= 1.5
+        reasons.append("У аккаунта анимированный аватар (-1.5)")
+
+    if not member.public_flags.value:
+        score += 0.5
+        reasons.append("У аккаунта нет значков профиля (+0.5)")
+
+    if BOT_NAME_REGEX.match(member.name):
+        score += 2
+        reasons.append("Ник попадает под паттерн ботов (+2)")
+
+    return score, reasons
+
+class SuspicionActionView(discord.ui.View):
+    def __init__(self, target_member: discord.Member, bot: commands.Bot, score: float):
+        super().__init__(timeout=None)
+        self.target_member = target_member
+        self.bot = bot
+        self.score = score
+
+    @discord.ui.button(label="Изолировать", style=discord.ButtonStyle.danger)
+    async def btn_isolate(self, interaction: discord.Interaction, button: discord.ui.Button):   
+        user_roles = [
+            role for role in self.target_member.roles 
+            if not role.is_default() and not role.managed
+        ]
+        isolation_cog = self.bot.get_cog("Isolation")
+        if not isolation_cog:
+            return await interaction.response.send_message("❌ Ошибка: Модуль изоляции не найден.", ephemeral=True)
+
+        isolated_user = IsolatedUser(
+            roles=user_roles,
+            isolated_at=time.time(),
+            isolated_by=interaction.user.id,
+            reason=f"[Omnivisor] Изолирован из-за высокого уровна подозрительности {self.score}"
+        )
+
+        async with isolation_cog._file_lock:
+            isolated_data = await isolation_cog.load_isolated_data()
+            isolated_data[str(self.target_member.id)] = asdict(isolated_user)
+            await isolation_cog.save_isolated_data(isolated_data)
+
+        settings_data = settings.load_settings()
+        isolation_role_id = settings_data.get('isolation_role_id')
+        isolation_role = interaction.guild.get_role(isolation_role_id)
+
+        if isolation_role:
+            if user_roles:
+                await self.target_member.remove_roles(*user_roles, reason=f"Изолирован {interaction.user} через Omnivisor.")
+            await self.target_member.add_roles(isolation_role, reason=f"Изолирован {interaction.user} через Omnivisor.")
+
+        from utils import omnivisor_db as db
+        await db.log_action(
+            action_type="Изоляция",
+            display_name=self.target_member.display_name,
+            username=self.target_member.name,
+            user_id=self.target_member.id,
+            moderator_id=interaction.user.id,
+            reason=isolated_user.reason,
+            timestamp=int(isolated_user.isolated_at),
+            joined_at=int(self.target_member.joined_at.timestamp()) if self.target_member.joined_at else 0
+        )
+
+        for child in self.children:
+            child.disabled = True
+
+        embed = interaction.message.embeds[0]
+        embed.add_field(
+            name = "🛡️ Решение",
+            value = f"✅ Изолирован модератором {interaction.user.mention}"
+        )
+        await interaction.response.edit_message(embed=embed, view=self)
+
+    @discord.ui.button(label="Проигнорировать", style=discord.ButtonStyle.secondary)
+    async def btn_ignore(self, interaction: discord.Interaction, button: discord.ui.button):
+        for child in self.children:
+            child.disabled = True
+
+        from utils import omnivisor_db as db
+        await db.log_action(
+            action_type="Игнорирование подозрения",
+            display_name=self.target_member.display_name,
+            username=self.target_member.name,
+            user_id=self.target_member.id,    
+            moderator_id=interaction.user.id,
+            reason="Модератор счел аккаунт безопасным",
+            timestamp=int(time.time()),
+            joined_at=int(self.target_member.joined_at.timestamp()) if self.target_member.joined_at else 0
+        )
+        embed = interaction.message.embeds[0]
+        embed.add_field(
+            name = "🛡️ Решение",
+            value = f"👀 Проигнорирован модератором {interaction.user.mention}"
+        )
+        await interaction.response.edit_message(embed=embed, view=self)
 
 class Omnivisor(commands.Cog):
     """Cog для организации работы проекта Омнивизор через РМК-Бота"""
@@ -29,446 +151,401 @@ class Omnivisor(commands.Cog):
         user_roles = [role.id for role in interaction.user.roles]
         return any(role_id in admin_roles for role_id in user_roles)
     
-    async def find_first_message(self, member: discord.Member):
-        """Пытается найти первое сообщение участника на сервере"""
-        first_message = None
-        oldest_date = member.joined_at   
+    def _get_log_channel(self, guild: discord.Guild) -> discord.TextChannel | None:
+        """Загружает канал для логов из настроек"""
+        settings_data = settings.load_settings()
+        channel_id = settings_data.get('log_channel')
+        log_channel = guild.get_channel(channel_id) if channel_id else None
         
-        for channel in member.guild.text_channels:
-            if not channel.permissions_for(member.guild.me).read_message_history:
-                continue
-                
-            try:
-                async for message in channel.history(limit=200, oldest_first=True):
-                    if message.author == member:
-                        if not first_message or message.created_at < first_message.created_at:
-                            first_message = message
-                            break  
-            except discord.Forbidden:
-                continue
-        
-        if first_message:
-            timestamp = int(first_message.created_at.timestamp())
-            return f"Первое сообщение: <t:{timestamp}:F>\n **Ссылка:** {first_message.jump_url}"
-        return "❌ Не удалось найти первое сообщение (возможно, слишком далеко в истории)"
+        return log_channel
     
-    async def find_last_message(self, member: discord.Member):
-        """Пытается найти последнее сообщение участника на сервере"""
-        last_message = None
-        newest_date = 0  
+    def _get_omnivisor_roles(self) -> str:
+        """Загружает роли для пинга в логировании из настроек"""
+        settings_data = settings.load_settings()
+
+        if not settings_data.get('auto_stat_enabled', True):
+            return ""
         
-        for channel in member.guild.text_channels:
-            if not channel.permissions_for(member.guild.me).read_message_history:
-                continue
-                
-            try:
-                async for message in channel.history(limit=200):
-                    if message.author == member:
-                        if not last_message or message.created_at > last_message.created_at:
-                            last_message = message
-                        break  
-                        
-            except discord.Forbidden:
-                continue
-        
-        if last_message:
-            timestamp = int(last_message.created_at.timestamp())
-            return f"Последнее сообщение: <t:{timestamp}:F>\n **Ссылка:** {last_message.jump_url}"
-        return "❌ Не удалось найти последнее сообщение"
-    
-    async def count_messages_slow(self, member: discord.Member, requester: discord.Member) -> int:
-        """Считает сообщения участника на сервере (с пагинацией по 5000)"""
-        count = 0
-        print(f"⚠️ ВНИМАНИЕ: {requester.name} ({requester.id}) запустил подсчёт сообщений для {member.name} ({member.id})")
+        omnivisor_roles_ids = settings_data.get('auto_stat_roles', [])
+        omnivisor_roles = " ".join([f"<@&{r}>" for r in omnivisor_roles_ids])
+        return omnivisor_roles
 
-        
-        channels = list(member.guild.text_channels) #+ list(member.guild.threads) + list(member.guild.forums)
-
-        for channel in channels:
-            if not channel.permissions_for(member.guild.me).read_message_history:
-                continue
-
-            last_id = None  
-            while True:
-                try:
-                   
-                    kwargs = {'limit': 5000}
-                    if last_id:
-                        kwargs['before'] = discord.Object(id=last_id)
-
-                    messages = []
-                    async for message in channel.history(**kwargs):
-                        messages.append(message)
-                        if message.author == member:
-                            count += 1
-
-                    if not messages:
-                        break  
-
-                    last_id = messages[-1].id
-
-                    if len(messages) < 5000:
-                        break
-
-                except discord.Forbidden:
-                    break  
-                except Exception as e:
-                    print(f"Ошибка в канале {channel.name}: {e}")
-                    break
-
-        return count
-    
-    async def send_stats_dm(self, target: discord.Member, new_member: discord.Member):
-        """Отправляет статистику о новом участнике в ЛС"""
-        
-        embed = discord.Embed(
-            title="📥 Новый участник на сервере",
-            description=f"На сервер зашёл {new_member.mention}",
-            color=RMC_EMBED_COLOR,
-            timestamp=discord.utils.utcnow()
-        )
-        
-        embed.add_field(
-            name="Участник",
-            value=f"Отображаемое имя: `{new_member.display_name}`\nID: `{new_member.id}`",
-            inline=False
-        )
-        
-        embed.add_field(
-            name="📅 Дата создания аккаунта",
-            value=f"<t:{int(new_member.created_at.timestamp())}:D>",
-            inline=False
-        )
-        
-        embed.set_footer(text=f"Автостатистика • {new_member.guild.name}")
-        
-        await target.send(embed=embed)
     
     @commands.Cog.listener()
     async def on_member_join(self, member: discord.Member):
-        """Автоматически собирает информацию о новом участнике, если включена автостатистика"""
-        
+        from utils import omnivisor_db as db
+
+        score, reasons = await evaluate_suspicion(member)
+
+        await db.log_action(
+            action_type="Новый участник на сервере",
+            display_name=member.display_name,
+            username=member.name,
+            user_id=member.id,
+            moderator_id=None,
+            timestamp=int(time.time()),
+            joined_at=int(member.joined_at.timestamp()) if member.joined_at else 0
+        )
+
         settings_data = settings.load_settings()
-        auto_stat_enabled = settings_data.get('auto_stat_enabled', 0)
-
-        if auto_stat_enabled != 1:
-            return  
+        log_channel = self._get_log_channel(member.guild)
+        omnivisor_roles = self._get_omnivisor_roles()
         
-        dm_mode = settings_data.get('dm_mode', 0)
-        role_id = settings_data.get('auto_stat_role_id')
-        
-        # Проверяем, есть ли роль для упоминания (если нужно)
-        role_mention = f"<@&{role_id}>" if role_id else ""
-        
-        # Создаём embed с информацией
-        member_roles = [role for role in member.roles if not role.is_default() and not role.managed]
-        role_mentions = [role.mention for role in member_roles]
-        roles_text = ", ".join(role_mentions) if role_mentions else "❌ Нет ролей"
-
-        channel_id = settings_data.get('log_channel')
-        if not channel_id:
-            return
-            
-        log_channel = member.guild.get_channel(channel_id)
         if not log_channel:
-            raise NoLogChannelError()
+            pass
+            # raise NoLogChannelError()
         
-        user_info_embed = discord.Embed(
+        log_embed = discord.Embed(
             title="📥 Новый участник на сервере",
-            description=f"Информация о новом участнике {member.mention}",
             color=RMC_EMBED_COLOR,
             timestamp=discord.utils.utcnow()
         )
-        
-        user_info_embed.add_field(
-            name="Участник",
-            value=f"Отображаемое имя: ```{member.display_name}``` | Глобальное имя: ```{member.global_name or 'Нет'}``` | ID: ```{member.id}```",
-            inline=False
+        log_embed.add_field(name="Участник", value=f"{member.mention}\n`{member.id}`\n@{member.name}", inline=True)
+        log_embed.add_field(name="📅 Даты", value=f"Дата создания аккаунта: <t:{int(member.created_at.timestamp())}:d> | Зашёл на сервер: <t:{int(member.joined_at.timestamp())}:d>", inline=True)
+        reasons_text = "\n".join(reasons) if reasons else "Подозрительных признаков не найдено"
+        log_embed.add_field(name=f"📊 Индекс подозрения: {score}", value=f"```{reasons_text}```", inline=False)
+        log_embed.set_thumbnail(url=member.display_avatar.url)
+
+        if score >= 2:
+            ping_roles = " ".join([f"<@&{r}>" for r in settings_data.get('admin_roles', [])])
+            view = SuspicionActionView(member, self.bot, score)
+            await log_channel.send(content=f"⚠️ {ping_roles} **Внимание, обнаружен вход подозрительного аккаунта!** Требуется внимание администрации", embed=log_embed, view=view)
+        else:
+            await log_channel.send(content=f"{omnivisor_roles}",embed=log_embed)
+
+    @commands.Cog.listener()
+    async def on_member_remove(self, member: discord.Member):
+        import asyncio
+        from utils import omnivisor_db as db
+        await asyncio.sleep(2)
+
+        action_type = "Выход с сервера"
+        moderator_id = None
+        reason = "Самостоятельный выход"
+
+        try:
+            async for entry in member.guild.audit_logs(limit=3, action=discord.AuditLogAction.kick):
+                if entry.target.id == member.id:
+                    action_type = "Кик"
+                    moderator_id = entry.user.id
+                    reason = entry.reason or "Причина не указана"
+                    break
+        except discord.Forbidden:
+            pass
+
+        await db.log_action(
+            action_type=action_type,
+            display_name=member.display_name,
+            username=member.name,
+            user_id=member.id,
+            moderator_id=moderator_id,
+            timestamp=int(time.time()),
+            joined_at=0,
         )
-        
-        user_info_embed.add_field(
-            name="Роли участника",
-            value=roles_text,
-            inline=False
-        )
-        
-        timestamp_created_at = int(member.created_at.timestamp())
-        timestamp_joined_at = int(member.joined_at.timestamp())
-        
-        user_info_embed.add_field(
-            name="📅 Даты",
-            value=f"Дата создания аккаунта: <t:{timestamp_created_at}:d> | Зашёл на сервер: <t:{timestamp_joined_at}:d>",
-            inline=False
-        )
-        
-        user_info_embed.set_author(
-            name=member.display_name,
-            icon_url=member.avatar.url if member.avatar else None
-        )
-        
-        user_info_embed.set_footer(text="Автостатистика")
-        
-        # ✅ Раздельная логика в зависимости от dm_mode
-        if dm_mode == 1:
-            # Отправляем в ЛС пользователям с указанной ролью
-            role = member.guild.get_role(role_id) if role_id else None
-            if not role:
-                return
-            
-            for target in role.members:
-                try:
-                    # Отправляем embed в ЛС
-                    await target.send(embed=user_info_embed)
-                except discord.Forbidden:
-                    continue
-                except Exception as e:
-                    print(f"Ошибка отправки в ЛС {target}: {e}")
-            dm_log_embed = discord.Embed(
-                title="📤 Автостатистика отправлена в ЛС",
-                description=f"Информация о новом участнике {member.mention} отправлена в ЛС",
+
+        log_channel = self._get_log_channel(member.guild)
+        omnivisor_roles = self._get_omnivisor_roles()
+
+        if log_channel:
+            log_embed = discord.Embed(
+                title="📤 Участник покинул сервер",
                 color=RMC_EMBED_COLOR,
                 timestamp=discord.utils.utcnow()
             )
-            await log_channel.send(embed=dm_log_embed)
-        else:
-            # Отправляем в канал логов
+            log_embed.add_field(name="Участник", value=f"{member.mention} (`{member.id}`)\n@{member.name}", inline=True)
+            log_embed.add_field(name="Действие", value=action_type, inline=True)
+            if moderator_id:
+                log_embed.add_field(name="Модератор", value=f"<@{moderator_id}>", inline=True)
+                log_embed.add_field(name="Причина", value=f"```{reason}```", inline=False)
+
+            await log_channel.send(content=omnivisor_roles, embed=log_embed)
+
+    @commands.Cog.listener()
+    async def on_member_ban(self, guild = discord.Guild, user = discord.User):
+        import asyncio
+        from utils import omnivisor_db as db
+        
+        await asyncio.sleep(2)
+        action_type = "Бан"
+        try:
+            async for entry in guild.audit_logs(limit=3, action=discord.AuditLogAction.ban):
+                if entry.target.id == user.id:
+                    moderator_id = entry.user.id
+                    reason = entry.reason or "Причина не указана"
+                    break
+        except discord.Forbidden:
+            pass
+
+        display_name = getattr(user, 'display_name', user.name)
+
+        await db.log_action(
+            action_type = action_type, 
+            display_name = display_name, 
+            username = user.name, 
+            user_id = user.id, 
+            timestamp = int(time.time()), 
+            joined_at = 0, 
+            moderator_id = moderator_id, 
+            reason = reason
+        )
+
+        settings_data = settings.load_settings()
+        log_channel = self._get_log_channel(guild)
+        omnivisor_roles = self._get_omnivisor_roles()
+
+        if log_channel:
+            log_embed = discord.Embed(
+                title="🔨 Участник был забанен",
+                color=RMC_EMBED_COLOR,
+                timestamp=discord.utils.utcnow()
+            ) 
+            log_embed.add_field(name="Участник", value=f"{user.mention} (`{user.id}`)\n@{user.name}", inline=True)
+            if moderator_id:
+                log_embed.add_field(name="Модератор", value=f"<@{moderator_id}>", inline=True)
+                log_embed.add_field(name="Причина", value=f"```{reason}```", inline=False)
+            await log_channel.send(content=omnivisor_roles, embed=log_embed)
+
+    @app_commands.command(
+        name="export_logs",
+        description="Выгрузить отчёт Omnivisor в Excel"
+    )
+    @app_commands.describe(
+        clear_db="Очистить базу данных после выгрузки отчёта?"
+    )
+    @app_commands.choices(fruits=[
+        app_commands.Choice(name='Нет', value=0),
+        app_commands.Choice(name='Да', value=1),
+    ])
+    async def export_logs(self, interaction: discord.Interaction, clear_db: int = 0):
+        if not await self.check_admin(interaction):
+            return await interaction.response.send_message("❌ Недостаточно прав", ephemeral=True)
+        
+        await interaction.response.defer(ephemeral=True)
+
+        clear_db_bool = bool(clear_db)
+
+        from utils import omnivisor_db as db
+        logs = await db.get_logs_for_export()
+
+        if not logs:
+            return await interaction.followup.send("📭 База данных пуста. Действий для выгрузки нет.", ephemeral=True)
+        
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.title = "Omnivisor Logs"
+
+        headers = [
+            "ID Лога", "Действие", "Никнейм", "Имя аккаунта", 
+            "ID Пользователя", "Дата действия", "Дата захода", 
+            "Модератор (ID)", "Причина"
+        ]
+        ws.append(headers)
+
+        mode_names_cache = {}
+
+        for row in logs:
+            action_time = "Неизвестно"
+            if row['timestamp']:
+                action_time = datetime.fromtimestamp(row['timestamp']).strftime('%d.%m.%Y %H:%M:%S')
+
+            join_time = "Неизвестно"
+            if row['joined_at'] and row['joined_at'] > 0:
+                join_time = datetime.fromtimestamp(row['joined_at']).strftime('%d.%m.%Y %H:%M:%S')
+
+            mod_name = "Система/Бот"
+            mod_id = row['moderator_id']
+
+            if mod_id:
+                if mod_id in mode_names_cache:
+                    mod_name = mode_names_cache[mod_id]
+                else:
+                    mod = interaction.guild.get_member(mod_id) 
+                    if not mod:
+                        mod = self.bot.get_user(mod_id)
+                    
+                    if mod:
+                        mod_name = f"{mod.display_name} (@{mod.name})"
+                    else:
+                        mod_name = f"Неизвестно (ID: {mod_id})"
+                    
+                    mode_names_cache[mod_id] = mod_name
+
+            ws.append([
+                row['log_id'],
+                row['action_type'],
+                row['display_name'],
+                row['username'],
+                str(row['user_id']), 
+                action_time,
+                join_time,
+                mod_name,
+                row['reason']
+            ])
+
+        buffer = io.BytesIO()
+        wb.save(buffer)
+        buffer.seek(0)
+
+        file_name = f"omnivisor_logs_{datetime.now().strftime('%d_%m_&Y')}.xlsx"
+        discord_file = discord.File(fp=buffer, filename=file_name)
+
+        response_embed = discord.Embed(
+            title="✅ Выгрузка журнала успешно завершена!",
+            description="Файл прикреплен к сообщению.",
+            color=RMC_EMBED_COLOR,
+            timestamp=discord.utils.utcnow()
+        )
+        if clear_db_bool:
+            response_embed.add_field(
+                name="🗑️ Очистка",
+                value="База данных логов была очищена согласно запросу."
+            )
+
+        await interaction.followup.send(embed=response_embed, file=discord_file)
+
+        if clear_db_bool:
+            await db.clear_action_logs()
+   
+
+    @app_commands.command(
+       name="sync_db",
+       description="Создать слепок участников сервера для дополнения Протокол-ξ."
+    )
+    @app_commands.guild_only()
+    async def sync_db(self, interaction: discord.Interaction):
+        if not await self.check_admin(interaction):
+            return await interaction.response.send_message("❌ Недостаточно прав", ephemeral=True)
+        
+        await interaction.response.defer(ephemeral=True)
+
+        members_to_sync = []
+
+        for member in interaction.guild.members:
+            if member.bot:
+                continue
+
+            roles_list = [role.name for role in member.roles if not role.is_default()]
+            roles_str = ", ".join(roles_list) if roles_list else "Нет ролей"
+
+            joined_at = int(member.joined_at.timestamp()) if member.joined_at else 0
+            created_at = int(member.created_at.timestamp())
+
+            members_to_sync.append((
+                "Синхронизация",        # action_type
+                member.display_name,    # display_name
+                member.name,            # username
+                member.id,              # user_id
+                created_at,             # created_at
+                joined_at,              # joined_at
+                roles_str               # roles
+            ))
+
+        from utils import omnivisor_db as db
+        await db.sync_members(members_to_sync)
+
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.title = "Server Snapshot"
+
+        headers = [
+            "Тип записи", "Никнейм", "Имя аккаунта", 
+            "ID Пользователя", "Дата создания", "Дата захода", "Список ролей"
+        ]
+        ws.append(headers)
+
+        for data in members_to_sync:
+            c_time = datetime.fromtimestamp(data[4]).strftime('%d.%m.%Y %H:%M:%S')
+            j_time = datetime.fromtimestamp(data[5]).strftime('%d.%m.%Y %H:%M:%S') if data[5] > 0 else "Неизвестно"
             
-            content = role_mention if role_mention else None
-            await log_channel.send(content=content, embed=user_info_embed)
-    
+            ws.append([
+                data[0], 
+                data[1], 
+                data[2], 
+                str(data[3]), 
+                c_time, 
+                j_time, 
+                data[6]  
+            ])
+
+        buffer = io.BytesIO()
+        wb.save(buffer)
+        buffer.seek(0)
+
+        file_name = f"omnivisor_snapshot_{datetime.now().strftime('%d_%m_%Y_%H%M')}.xlsx"
+        discord_file = discord.File(fp=buffer, filename=file_name)
+
+        response_embed = discord.Embed(
+            title="🔄 База данных синхронизирована",
+            description=(
+                f"Данные участников обновлены в БД.\n"
+                f"Всего обработано: **{len(members_to_sync)}** чел.\n\n"
+                f"💾 Актуальный слепок прикреплен к сообщению."
+            ),
+            color=RMC_EMBED_COLOR,
+            timestamp=discord.utils.utcnow()
+        )
+
+        await interaction.followup.send(embed=response_embed, file=discord_file)
 
     @app_commands.command(
         name="omnivisor_settings",
-        description="Настройки информации"
+        description="Настройки системы уведомлений и мониторинга Omnivisor"
     )
-    @app_commands.guild_only()
     @app_commands.describe(
-        role = "Роль для упоминания при автостатистике",
-        auto_stat = "Статус автостатистики",
-        dm_mode = "Режим отправки информации в ЛС выбранному модератору"
+        notifications="Включить или выключить упоминания ролей Омнивизора",
+        add_role="Добавить роль в список для пингов",
+        remove_role="Удалить роль из списка для пингов"
     )
-    @app_commands.choices(auto_stat=[
-        app_commands.Choice(name="Включить", value=1),
-        app_commands.Choice(name="Выключить", value=0)
-    ])
-    @app_commands.choices(dm_mode=[
-        app_commands.Choice(name="Включить", value=1),
-        app_commands.Choice(name="Выключить", value=0)
-    ])
-    async def omnivisor_settings(self, interaction: discord.Interaction, role: Optional[discord.Role], auto_stat: Optional[int], dm_mode: Optional[int] = None):
+    async def omnivisor_settings(self, interaction: discord.Interaction, notifications: Optional[bool] = None, add_role: Optional[discord.Role] = None, remove_role: Optional[discord.Role] = None):
         if not await self.check_admin(interaction):
-            await interaction.response.send_message("❌ Недостаточно прав", ephemeral=True)
-            return
+            return await interaction.response.send_message("❌ Недостаточно прав", ephemeral=True)
 
         settings_data = settings.load_settings()
-
-
-        if role is None and auto_stat is None and dm_mode is None:
-            saved_role_id = settings_data.get('auto_stat_role_id')
-            role_object = interaction.guild.get_role(saved_role_id) if saved_role_id else None
-            role_text = role_object.mention if role_object else "❌ Не настроена"
-
-            auto_stat_enabled = settings_data.get('auto_stat_enabled')
-            auto_stat_text = "✅ Включена" if auto_stat_enabled == 1 else "❌ Выключена"
-            
-            dm_mode_enabled = settings_data.get('dm_mode', 0)
-            dm_mode_text = "✅ Включён" if dm_mode_enabled == 1 else "❌ Выключен"
-
-            embed = discord.Embed(
-                title="⚙️ Сохранённые настройки",
-                description=(
-                    f"**Роль упоминания:** {role_text}\n"
-                    f"**Автостатистика:** {auto_stat_text}\n"
-                    f"**DM-режим:** {dm_mode_text}"
-                ),
-                color=RMC_EMBED_COLOR,
-                timestamp=discord.utils.utcnow()
-            )
-            await interaction.response.send_message(embed=embed)
-            return
-            
         changes = []
-        needs_save = False
 
-        if role:
-            # if role >= interaction.guild.me.top_role:
-            #     embed = discord.Embed(
-            #         title="❌Ошибка",
-            #         description="Для изоляции нельзя назначить роль, которая выше роли бота!",
-            #         color=RMC_EMBED_COLOR,
-            #         timestamp=discord.utils.utcnow()
-            #     )
-            #     await interaction.response.send_message(embed=embed, ephemeral=True)
-            #     return
-            if role.is_default():
-                embed = discord.Embed(
-                    title="❌Ошибка",
-                    description="Для изоляции нельзя назначить `@everyone`!",
-                    color=RMC_EMBED_COLOR,
-                    timestamp=discord.utils.utcnow()
-                )
-                await interaction.response.send_message(embed=embed, ephemeral=True)
-                return
-            else: 
-                settings_data['auto_stat_role_id'] = role.id
-                changes.append(f"Роль {role.mention}")
-                needs_save = True
-                
-        if auto_stat is not None:  
-            settings_data['auto_stat_enabled'] = auto_stat
-            needs_save = True
-            if auto_stat == 1:
-                changes.append("✅ Автостатистика включена")
-            else:  # auto_stat == 0
-                changes.append("❌ Автостатистика выключена")
-        if dm_mode is not None:
-            settings_data['dm_mode'] = dm_mode
-            needs_save = True
-            if dm_mode == 1:
-                changes.append("✅ DM-режим включён")
+        if notifications is not None:
+            settings_data['auto_stat_enabled'] = notifications
+            status = "Включены" if notifications else "Выключены"
+            changes.append(f"Уведомления: **{status}**")
+
+        if add_role:
+            roles = settings_data.get('auto_stat_roles', [])
+            if add_role.id not in roles:
+                roles.append(add_role.id)
+                settings_data['auto_stat_roles'] = roles
+                changes.append(f"Добавлена роль: {add_role.mention}")
             else:
-                changes.append("❌ DM-режим выключен")
+                changes.append(f"⚠️ Роль {add_role.mention} уже есть в списке")
 
-        if needs_save:
+        if remove_role:
+            roles = settings_data.get('auto_stat_roles', [])
+            if remove_role.id in roles:
+                roles.remove(remove_role.id)
+                settings_data['auto_stat_roles'] = roles
+                changes.append(f"Удалена роль: {remove_role.mention}")
+            else:
+                changes.append(f"⚠️ Роль {remove_role.mention} не найдена в списке")
+
+        if changes:
             settings.save_settings(settings_data)
-
-            if len(changes) == 1:
-                desc = f"Установлен {changes[0]}"
-            else:
-                desc = f"Установлены: \n- {changes[0]} \n- {changes[1]}"
-
             embed = discord.Embed(
-                title="✅Настройки изменены успешно",
-                description = desc,
-                color=RMC_EMBED_COLOR,
+                title="✅ Настройки Omnivisor обновлены",
+                description="\n".join(changes),
+                color=discord.Color.green(),
                 timestamp=discord.utils.utcnow()
             )
             await interaction.response.send_message(embed=embed)
-
-        else: 
+        else:
+            is_enabled = settings_data.get('auto_stat_enabled', True)
+            roles_ids = settings_data.get('auto_stat_roles', [])
+            roles_mentions = " ".join([f"<@&{r}>" for r in roles_ids]) if roles_ids else "Не настроены"
+            
             embed = discord.Embed(
-                title="ℹ️ Нет изменений",
-                description="Вы не указали параметры для изменения.",
-                color=RMC_EMBED_COLOR,
+                title="⚙️ Текущие настройки Omnivisor",
+                color=discord.Color.blue(),
                 timestamp=discord.utils.utcnow()
             )
+            embed.add_field(name="Уведомления (пинги)", value="✅ Включены" if is_enabled else "❌ Выключены", inline=False)
+            embed.add_field(name="Роли для уведомлений", value=roles_mentions, inline=False)
+            embed.set_footer(text="Используйте параметры команды для изменения этих настроек")
             await interaction.response.send_message(embed=embed)
-
-
-    @app_commands.command(
-        name="user_info",
-        description="Получить информацию об участнике"
-    )
-    @app_commands.guild_only()
-    @app_commands.describe(
-        member = "Участник для получения информации",
-        count_status = "Включить или выключить подсчёт сообщений. ПРЕДУПРЕЖДЕНИЕ: ОЧЕНЬ РЕСУРСОЗАТРАНАЯ ФУНКЦИЯ, ИСПОЛЬЗОВАТЬ С ОСТОРОЖНОСТЬЮ!!!"
-    )
-    @app_commands.choices(count_status=[
-        app_commands.Choice(name="Включить (опасно!)", value=1),
-        app_commands.Choice(name="Выключить", value=0)
-    ])
-    async def user_info(self, interaction: discord.Interaction, member: discord.Member, count_status: Optional[int] = False):
-        if not await self.check_admin(interaction):
-            await interaction.response.send_message("❌ Недостаточно прав", ephemeral=True)
-            return
-        
-
-        try:
-            settings_data = settings.load_settings()
-            channel_id = settings_data.get('log_channel')
-            log_channel = interaction.guild.get_channel(channel_id) if channel_id else None 
-
-            member_roles = [role for role in member.roles if not role.is_default() and not role.managed]
-            role_mentions = [role.mention for role in member_roles]
-            roles_text = ", ".join(role_mentions) if role_mentions else "❌ Нет ролей"
-
-            if not log_channel:
-                raise NoLogChannelError()
-            
-            await interaction.response.defer(ephemeral=True)
-
-            text=f"{interaction.user.mention}"
-
-            user_info_embed = discord.Embed(
-                title="Информация об участнике сервера",
-                description=f"Информация об участнике {member.mention}",
-                color=RMC_EMBED_COLOR
-            )
-            user_info_embed.add_field(
-                name="Участник",
-                value=f"Отображаемое имя: ```{member.display_name}``` | Глобальное имя: ```{member.global_name or 'Нет'}``` | ID: ```{member.id}```",
-                inline=False
-            )
-            user_info_embed.add_field(
-                name="Роли участника",
-                value=f"{roles_text}"
-            )
-            timestamp_created_at = int(member.created_at.timestamp())
-            timestamp_joined_at = int(member.joined_at.timestamp())
-
-            user_info_embed.add_field(
-                name="📅 Даты",
-                value=f"Дата создания аккаунта: <t:{timestamp_created_at}:d> | Дата захода на сервер: <t:{timestamp_joined_at}:d>",
-                inline=False
-            )
-            first_message_info = await self.find_first_message(member)
-            if not first_message_info:
-                first_message_info = "❌ Не удалось найти первое сообщение"
-            user_info_embed.add_field(
-                name="📝 Первое сообщение",
-                value=first_message_info,
-                inline=False
-            )
-            last_message_info = await self.find_last_message(member)
-            if not last_message_info:
-                last_message_info = "❌ Не удалось найти последнее сообщение"
-            user_info_embed.add_field(
-                name="📝 Последнее сообщение",
-                value=last_message_info,
-                inline=False
-            )
-            count_status_bool = bool(count_status)
-            if count_status_bool:
-                message_count = await self.count_messages_slow(member, interaction.user)
-                display_value = f"~{message_count}"
-            else:
-                message_count = "❌ Подсчёт сообщений выключен"
-                display_value = message_count
-            user_info_embed.add_field(
-                name="📝 Количество сообщений",
-                value=display_value,
-                inline=False
-            )
-            user_info_embed.set_author(
-                name=member.display_name,
-                icon_url=member.avatar.url
-            )
-            user_info_embed.set_footer(
-                text=f"Запросил: {interaction.user.display_name} ({interaction.user.id})",
-                icon_url=interaction.user.avatar.url
-            )
-
-            response_embed = discord.Embed(
-                title="✅ Информация успешно собрана",
-                description=f"Собранная информация отправлена в {log_channel.mention}",
-                color=RMC_EMBED_COLOR
-            )
-
-
-            await log_channel.send(embed=user_info_embed, content=text)
-            await interaction.followup.send(embed=response_embed, ephemeral=True)
-            
-
-            
-
-        except Exception as e:
-            embed = discord.Embed(
-                title="❌ Ошибка",
-                description=f"Не удалось получить информацию об участнике {member.mention}: ```{e}```",
-                color=RMC_EMBED_COLOR
-            )
-            await interaction.followup.send(embed=embed, ephemeral=True)
-
-async def setup(bot: commands.Bot):
-    await bot.add_cog(Omnivisor(bot))

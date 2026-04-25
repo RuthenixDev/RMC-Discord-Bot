@@ -98,7 +98,7 @@ class Isolation(commands.Cog):
         user_roles = [role.id for role in interaction.user.roles]
         return any(role_id in admin_roles for role_id in user_roles)
     
-    async def _load_isolated_data(self) -> dict:
+    async def load_isolated_data(self) -> dict:
         """Async-загрузка данных об изолированных участниках из JSON-файла"""
         if not os.path.exists(isolated_users):
             return {}
@@ -122,7 +122,7 @@ class Isolation(commands.Cog):
         except json.JSONDecodeError:
             return {}
         
-    async def _save_isolated_data(self, data: dict):
+    async def save_isolated_data(self, data: dict):
         """Async-сохранение данных об изолированных участниках в JSON-файл"""
         raw_data = {user_id: asdict(user_obj) for user_id, user_obj in data.items()}
 
@@ -243,7 +243,7 @@ class Isolation(commands.Cog):
             member = interaction.guild.get_member(isolation_member.id)
 
             async with self._file_lock: #LOCK
-                isolated_data = await self._load_isolated_data()
+                isolated_data = await self.load_isolated_data()
 
                 if user_id in isolated_data:
                     embed = self._create_embed("❌Ошибка", "Пользователь уже изолирован!")
@@ -296,7 +296,23 @@ class Isolation(commands.Cog):
                     isolated_by=interaction.user.id,
                     reason=isolation_reason if isolation_reason else "Не указана"
                 )
-                await self._save_isolated_data(isolated_data)
+                await self.save_isolated_data(isolated_data)
+
+                from utils import omnivisor_db as db
+                display_name = member.display_name if member else isolation_member.name
+                username = isolation_member.name
+                joined_at = int(member.joined_at.timestamp()) if member and member.joined_at else 0
+
+                await db.log_action(
+                    action_type="Изоляция",
+                    display_name=display_name,
+                    username=username,
+                    user_id=isolation_member.id,
+                    timestamp=int(time.time()),
+                    joined_at=joined_at,
+                    moderator_id=interaction.user.id,
+                    reason=isolation_reason if isolation_reason else "Не указана"
+                )
             
             status_text = "изолирован" if member else "изолирован заочно"
             response_embed = self._create_embed("✅Успешная изоляция", f"Пользователь {isolation_member.mention} {status_text}!")
@@ -345,7 +361,7 @@ class Isolation(commands.Cog):
         """Возвращает участника в изолятор (авто-возврат или заочная изоляция)."""
         
         user_id = str(member.id)
-        isolated_data = await self._load_isolated_data() 
+        isolated_data = await self.load_isolated_data() 
         
         if user_id in isolated_data:
             user_data = isolated_data[user_id]
@@ -376,6 +392,22 @@ class Isolation(commands.Cog):
 
             settings_data = settings.load_settings()
             role_id = settings_data.get('isolation_role_id')
+
+            from utils import omnivisor_db as db
+            display_name = member.display_name if member else member.name
+            username = member.name
+            joined_at = int(member.joined_at.timestamp()) if member and member.joined_at else 0
+
+            await db.log_action(
+                action_type="Возвращение",
+                display_name=display_name,
+                username=username,
+                user_id=member.id,
+                timestamp=int(time.time()),
+                joined_at=joined_at,
+                moderator_id=self.bot.user.id,
+                reason="Автоматическая изоляция при входе."
+            )
 
             if role_id:
                 isolation_role = member.guild.get_role(role_id)
@@ -424,38 +456,54 @@ class Isolation(commands.Cog):
         user_id = str(user.id)
 
         async with self._file_lock:
-            isolated_data = await self._load_isolated_data()
+            isolated_data = await self.load_isolated_data()
 
             if user_id in isolated_data:
                 user_data = isolated_data[user_id]
 
                 del isolated_data[user_id]
 
-                await self._save_isolated_data(isolated_data)
-                
-            settings_data = settings.load_settings()
-            channel_id = settings_data.get('log_channel')
-            log_channel = guild.get_channel(channel_id) if channel_id else None
+                await self.save_isolated_data(isolated_data)
 
-            # if not log_channel:
-            #     raise NoLogChannelError()
-            unisolate_time = time.time()
-            unisolate_time_formatted = f"<t:{int(unisolate_time)}:d>" 
-            
+            from utils import omnivisor_db as db
+            # display_name = member.display_name if member else unisolation_user.name
+            # username = unisolation_user.name
+            # joined_at = int(member.joined_at.timestamp()) if unisolation_user and unisolation_user.joined_at else 0
 
-            log_embed = self._create_embed("🔨 Участник был возвращён (по причине бана)")
-            log_embed.add_field(
-                name="Пользователь",
-                value=f"{user.mention}\nID: `{user.id}`",
-                inline=False
+            await db.log_action(
+                action_type="Возвращение",
+                display_name=user.global_name,
+                username=user.name,
+                user_id=user.id,
+                timestamp=int(time.time()),
+                joined_at=0,
+                moderator_id=self.bot.user.id,
+                reason="Автоматическое возвращение из изоляции по причине бана на сервере"
             )
-            log_embed.add_field(name="Кем возвращён", value=self.bot.user.mention, inline=True)            
-            iso_time = getattr(user_data, 'formatted_time', 'Неизвестно')
-            log_embed.add_field(name="Дата изоляции", value=iso_time, inline=True)
-            log_embed.add_field(name="Дата возврашения", value=unisolate_time_formatted, inline=True)
-            log_embed.add_field(name="Причина возвращения", value=f"```Автоматическое возвращение из изоляции по причине бана на сервере```", inline=False)
+                
+        settings_data = settings.load_settings()
+        channel_id = settings_data.get('log_channel')
+        log_channel = guild.get_channel(channel_id) if channel_id else None
 
-            await log_channel.send(embed=log_embed)
+        # if not log_channel:
+        #     raise NoLogChannelError()
+        unisolate_time = time.time()
+        unisolate_time_formatted = f"<t:{int(unisolate_time)}:d>" 
+        
+
+        log_embed = self._create_embed("🔨 Участник был возвращён (по причине бана)")
+        log_embed.add_field(
+            name="Пользователь",
+            value=f"{user.mention}\nID: `{user.id}`",
+            inline=False
+        )
+        log_embed.add_field(name="Кем возвращён", value=self.bot.user.mention, inline=True)            
+        isolated_time = getattr(user_data, 'formatted_time', 'Неизвестно')
+        log_embed.add_field(name="Дата изоляции", value=isolated_time, inline=True)
+        log_embed.add_field(name="Дата возврашения", value=unisolate_time_formatted, inline=True)
+        log_embed.add_field(name="Причина возвращения", value=f"```Автоматическое возвращение из изоляции по причине бана на сервере```", inline=False)
+
+        await log_channel.send(embed=log_embed)
 
 
     @app_commands.command(
@@ -499,7 +547,7 @@ class Isolation(commands.Cog):
             
 
             async with self._file_lock:
-                isolated_data = await self._load_isolated_data() #LOCK
+                isolated_data = await self.load_isolated_data() #LOCK
 
                 if user_id_str not in isolated_data:
                     embed = self._create_embed("❌ Ошибка", "Этот пользователь не числится в списке изолированных.")
@@ -532,7 +580,23 @@ class Isolation(commands.Cog):
                         pass
 
                 del isolated_data[user_id_str]
-                await self._save_isolated_data(isolated_data)
+                await self.save_isolated_data(isolated_data)
+
+                from utils import omnivisor_db as db
+                display_name = member.display_name if member else f"ID: {user_id_str}"
+                username = member.name if member else "Вне сервера"
+                joined_at = int(member.joined_at.timestamp()) if member and member.joined_at else 0
+
+                await db.log_action(
+                    action_type="Возвращение",
+                    display_name=display_name,
+                    username=username,
+                    user_id=unisolation_user.id,
+                    timestamp=int(time.time()),
+                    joined_at=joined_at,
+                    moderator_id=interaction.user.id,
+                    reason=unisolation_reason if unisolation_reason else "Не указана"
+                )
 
             mention_str = member.mention if member else f"Пользователь с ID `{user_id_str}`"
             
@@ -554,8 +618,8 @@ class Isolation(commands.Cog):
             unisolate_time = time.time()
             unisolate_time_formatted = f"<t:{int(unisolate_time)}:d>" 
             
-            iso_time = getattr(user_data, 'formatted_time', 'Неизвестно')
-            log_embed.add_field(name="Дата изоляции", value=iso_time, inline=True)
+            isolated_time = getattr(user_data, 'formatted_time', 'Неизвестно')
+            log_embed.add_field(name="Дата изоляции", value=isolated_time, inline=True)
             log_embed.add_field(name="Дата возврашения", value=unisolate_time_formatted, inline=True)
             log_embed.add_field(name="Причина возвращения", value=f"```{unisolation_reason or 'Не указана'}```", inline=False)
             
@@ -614,7 +678,7 @@ class Isolation(commands.Cog):
         await interaction.response.defer(ephemeral=True)
 
         async with self._file_lock:
-            isolated_data = await self._load_isolated_data() #LOCK
+            isolated_data = await self.load_isolated_data() #LOCK
         
         #embed = self._create_embed("📋 Список изолированных участников")
 
