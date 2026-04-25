@@ -3,6 +3,7 @@ import os
 import json
 import time
 import aiofiles
+import asyncio
 from datetime import datetime
 from discord.ext import commands
 from discord import app_commands
@@ -82,6 +83,7 @@ class Isolation(commands.Cog):
 
     def __init__(self, bot: commands.Bot):
         self.bot = bot
+        self._file_lock = asyncio.Lock()
 
     async def cog_check(self, ctx: commands.Context):
         allowed = await check_cog_access(ctx, self.required_access)
@@ -240,60 +242,61 @@ class Isolation(commands.Cog):
             user_name = user_fetched.global_name or user_fetched.name
             member = interaction.guild.get_member(isolation_member.id)
 
-            isolated_data = await self._load_isolated_data()
+            async with self._file_lock: #LOCK
+                isolated_data = await self._load_isolated_data()
 
-            if user_id in isolated_data:
-                embed = self._create_embed("❌Ошибка", "Пользователь уже изолирован!")
-                embed.set_footer(text="Проверьте список изолированных пользователей через /isolate_list.")
-                await interaction.followup.send(embed=embed, ephemeral=True)
-                return
+                if user_id in isolated_data:
+                    embed = self._create_embed("❌Ошибка", "Пользователь уже изолирован!")
+                    embed.set_footer(text="Проверьте список изолированных пользователей через /isolate_list.")
+                    await interaction.followup.send(embed=embed, ephemeral=True)
+                    return
 
-            settings_data = settings.load_settings()
-            role_id = settings_data.get('isolation_role_id')
-            channel_id = settings_data.get('log_channel')
+                settings_data = settings.load_settings()
+                role_id = settings_data.get('isolation_role_id')
+                channel_id = settings_data.get('log_channel')
 
-            isolation_role = interaction.guild.get_role(role_id) if role_id else None
-            log_channel = interaction.guild.get_channel(channel_id) if channel_id else None 
+                isolation_role = interaction.guild.get_role(role_id) if role_id else None
+                log_channel = interaction.guild.get_channel(channel_id) if channel_id else None 
 
-            if not log_channel:
-                raise NoLogChannelError()
+                if not log_channel:
+                    raise NoLogChannelError()
 
-            if not isolation_role:
-                embed = self._create_embed("❌Ошибка", "Не назначена роль изоляции!")
-                embed.set_footer(text="Для настройки используйте /isolate_settings.")
-                await interaction.followup.send(embed=embed, ephemeral=True)
-                return
+                if not isolation_role:
+                    embed = self._create_embed("❌Ошибка", "Не назначена роль изоляции!")
+                    embed.set_footer(text="Для настройки используйте /isolate_settings.")
+                    await interaction.followup.send(embed=embed, ephemeral=True)
+                    return
 
-            role_ids = []
-            
-            if member:
-                admin_roles = settings_data.get('admin_roles', [])
-                isolation_member_roles = []
+                role_ids = []
                 
-                for role in member.roles:
-                    if not role.is_default() and not role.managed and role != isolation_role:
-                        if role.id in admin_roles:
-                            embed = self._create_embed(
-                                "❌Ошибка при изоляции", 
-                                "У выбранного участника есть роль, которая отмечена как административная."
-                            )
-                            await interaction.followup.send(embed=embed, ephemeral=True)
-                            return
-                        isolation_member_roles.append(role)
+                if member:
+                    admin_roles = settings_data.get('admin_roles', [])
+                    isolation_member_roles = []
+                    
+                    for role in member.roles:
+                        if not role.is_default() and not role.managed and role != isolation_role:
+                            if role.id in admin_roles:
+                                embed = self._create_embed(
+                                    "❌Ошибка при изоляции", 
+                                    "У выбранного участника есть роль, которая отмечена как административная."
+                                )
+                                await interaction.followup.send(embed=embed, ephemeral=True)
+                                return
+                            isolation_member_roles.append(role)
 
-                role_ids = [role.id for role in isolation_member_roles]
+                    role_ids = [role.id for role in isolation_member_roles]
 
-                if isolation_member_roles:
-                    await member.remove_roles(*isolation_member_roles)
-                await member.add_roles(isolation_role, reason=f"Изолирован {interaction.user}: {isolation_reason}")
+                    if isolation_member_roles:
+                        await member.remove_roles(*isolation_member_roles)
+                    await member.add_roles(isolation_role, reason=f"Изолирован {interaction.user}: {isolation_reason}")
 
-            isolated_data[user_id] = IsolatedUser(
-                roles=role_ids,
-                isolated_at=time.time(),
-                isolated_by=interaction.user.id,
-                reason=isolation_reason if isolation_reason else "Не указана"
-            )
-            await self._save_isolated_data(isolated_data)
+                isolated_data[user_id] = IsolatedUser(
+                    roles=role_ids,
+                    isolated_at=time.time(),
+                    isolated_by=interaction.user.id,
+                    reason=isolation_reason if isolation_reason else "Не указана"
+                )
+                await self._save_isolated_data(isolated_data)
             
             status_text = "изолирован" if member else "изолирован заочно"
             response_embed = self._create_embed("✅Успешная изоляция", f"Пользователь {isolation_member.mention} {status_text}!")
@@ -420,14 +423,16 @@ class Isolation(commands.Cog):
 
         user_id = str(user.id)
 
-        isolated_data = await self._load_isolated_data()
+        async with self._file_lock:
+            isolated_data = await self._load_isolated_data()
 
-        if user_id in isolated_data:
-            user_data = isolated_data[user_id]
+            if user_id in isolated_data:
+                user_data = isolated_data[user_id]
 
-            del isolated_data[user_id]
+                del isolated_data[user_id]
 
-            await self._save_isolated_data(isolated_data)
+                await self._save_isolated_data(isolated_data)
+                
             settings_data = settings.load_settings()
             channel_id = settings_data.get('log_channel')
             log_channel = guild.get_channel(channel_id) if channel_id else None
@@ -492,40 +497,42 @@ class Isolation(commands.Cog):
             
             await interaction.response.defer(ephemeral=True)
             
-            isolated_data = await self._load_isolated_data()
 
-            if user_id_str not in isolated_data:
-                embed = self._create_embed("❌ Ошибка", "Этот пользователь не числится в списке изолированных.")
-                await interaction.followup.send(embed=embed, ephemeral=True)
-                return
+            async with self._file_lock:
+                isolated_data = await self._load_isolated_data() #LOCK
 
-            user_data = isolated_data[user_id_str]
-            
-            member = interaction.guild.get_member(user_id_int)
-            if not member:
-                try:
-                    member = await interaction.guild.fetch_member(user_id_int)
-                except:
-                    member = None
+                if user_id_str not in isolated_data:
+                    embed = self._create_embed("❌ Ошибка", "Этот пользователь не числится в списке изолированных.")
+                    await interaction.followup.send(embed=embed, ephemeral=True)
+                    return
 
-            if member:
-                roles_to_restore = []
-                stored_roles = getattr(user_data, 'roles', []) 
+                user_data = isolated_data[user_id_str]
                 
-                for r_id in stored_roles:
-                    role = interaction.guild.get_role(r_id)
-                    if role and role.id != role_object.id:
-                        roles_to_restore.append(role)
+                member = interaction.guild.get_member(user_id_int)
+                if not member:
+                    try:
+                        member = await interaction.guild.fetch_member(user_id_int)
+                    except:
+                        member = None
 
-                try:
-                    await member.remove_roles(role_object, reason=f"Снятие изоляции: {unisolation_reason}")
-                    if roles_to_restore:
-                        await member.add_roles(*roles_to_restore, reason=f"Восстановление ролей: {unisolation_reason}")
-                except discord.Forbidden:
-                    pass
+                if member:
+                    roles_to_restore = []
+                    stored_roles = getattr(user_data, 'roles', []) 
+                    
+                    for r_id in stored_roles:
+                        role = interaction.guild.get_role(r_id)
+                        if role and role.id != role_object.id:
+                            roles_to_restore.append(role)
 
-            del isolated_data[user_id_str]
-            await self._save_isolated_data(isolated_data)
+                    try:
+                        await member.remove_roles(role_object, reason=f"Снятие изоляции: {unisolation_reason}")
+                        if roles_to_restore:
+                            await member.add_roles(*roles_to_restore, reason=f"Восстановление ролей: {unisolation_reason}")
+                    except discord.Forbidden:
+                        pass
+
+                del isolated_data[user_id_str]
+                await self._save_isolated_data(isolated_data)
 
             mention_str = member.mention if member else f"Пользователь с ID `{user_id_str}`"
             
@@ -606,7 +613,8 @@ class Isolation(commands.Cog):
             return
         await interaction.response.defer(ephemeral=True)
 
-        isolated_data = await self._load_isolated_data()
+        async with self._file_lock:
+            isolated_data = await self._load_isolated_data() #LOCK
         
         #embed = self._create_embed("📋 Список изолированных участников")
 
