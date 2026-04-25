@@ -4,4 +4,3 @@ settings.json
 RMC-Discord-Bot.code-workspace
 isolated_users.json
 omnivisor.db
-utils/omnivisor_db.py
