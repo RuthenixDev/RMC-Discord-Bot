@@ -6,6 +6,7 @@ import aiofiles
 from datetime import datetime
 from discord.ext import commands
 from discord import app_commands
+from discord.ui import View, Button
 from dataclasses import dataclass, asdict
 from typing import List, Optional, Dict
 from utils.exceptions import NoLogChannelError
@@ -15,14 +16,62 @@ from constants import RMC_EMBED_COLOR
 
 isolated_users = "isolated_users.json"
 
+class IsolationPaginatedView(discord.ui.View):
+    def __init__(self, data: List, author: discord.Member, create_embed_func):
+        super().__init__(timeout=180)
+        self.data = data
+        self.author = author
+        self.create_embed = create_embed_func
+        self.current_page = 0
+        self.per_page = 10
+
+        self.update_buttons()
+
+    def update_buttons(self):
+        total_pages = (len(self.data) - 1) // self.per_page + 1
+        self.children[0].disabled = (self.current_page == 0)
+        self.children[1].disabled = (self.current_page >= total_pages - 1)
+
+    async def get_page_embed(self):
+        total_items = len(self.data)
+
+        start = self.current_page * self.per_page
+        end = start + self.per_page
+        page_items = self.data[start:end]
+
+        total_pages = (len(self.data) - 1) // self.per_page + 1
+        embed = self.create_embed(f"📋 Список изолированных участников", f"Всего в изоляторе: **{total_items}**")
+        embed.set_footer(text=f"Страница {self.current_page + 1}/{total_pages}")
+
+        for item in page_items:
+            embed.add_field(name=item['name'], value=item['value'], inline=False)
+        return embed
+    
+    @discord.ui.button(label="◀️ Назад", style=discord.ButtonStyle.secondary)
+    async def previous_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user != self.author: return await interaction.response.send_message("❌ Эта кнопка не для тебя!", ephemeral=True)
+        # if self.current_page > 0:
+
+        self.current_page -= 1
+        self.update_buttons()
+        await interaction.response.edit_message(embed=await self.get_page_embed(), view=self)
+    @discord.ui.button(label="▶️ Вперед", style=discord.ButtonStyle.secondary)
+    async def next_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user != self.author: return await interaction.response.send_message("❌ Эта кнопка не для тебя!", ephemeral=True)
+        # if (self.current_page + 1) * self.per_page < len(self.data):
+
+        self.current_page += 1
+        self.update_buttons()
+        await interaction.response.edit_message(embed=await self.get_page_embed(), view=self)
+
+
 @dataclass
 class IsolatedUser:
     roles: List[int]
     isolated_at: Optional[float] = None
     isolated_by: Optional[int] = None
-    reason: str = "Не указана" # Дефолтное значение уже вшито!
+    reason: str = "Не указана" 
 
-    # Бонус: вшиваем генерацию красивого времени Discord прямо в класс
     @property
     def formatted_time(self) -> str:
         return f"<t:{int(self.isolated_at)}:d>" if self.isolated_at else "Неизвестно"
@@ -115,7 +164,6 @@ class Isolation(commands.Cog):
 
             role_text = role_object.mention if role_object else "❌Не настроена"
             channel_text = channel_object.mention if channel_object else "❌Не настроен"
-            #print("Не было указаны роли, публикую сохранённые настройки")
             embed = discord.Embed(
                 title="⚙️Сохранённые настройки",
                 description=f"В настройках сохранено следующее: \n - Роль изоляции: {role_text} \n - Канал для логов (установить в /set_log): {channel_text}",
@@ -330,15 +378,12 @@ class Isolation(commands.Cog):
                 isolation_role = member.guild.get_role(role_id)
                 if isolation_role:
                     try:
-                        # Выдаем роль
                         await member.add_roles(isolation_role, reason="Автоматическая изоляция при входе.")
 
-                        # Логируем
                         channel_id = settings_data.get('log_channel')
                         if channel_id:
                             log_channel = member.guild.get_channel(channel_id)
                             if log_channel:
-                                # Создаем эмбед ОДИН раз с правильными данными
                                 warning_embed = self._create_embed(
                                     title=title_text,
                                     description=description_text,
@@ -384,7 +429,6 @@ class Isolation(commands.Cog):
             return
 
         try:
-            # 1. Пытаемся получить ID из введенной строки
             try:
                 user_id_int = int(unisolation_user.strip())
                 user_id_str = str(user_id_int)
@@ -411,7 +455,6 @@ class Isolation(commands.Cog):
             
             isolated_data = await self._load_isolated_data()
 
-            # Проверяем, есть ли пользователь в базе данных
             if user_id_str not in isolated_data:
                 embed = self._create_embed("❌ Ошибка", "Этот пользователь не числится в списке изолированных.")
                 await interaction.followup.send(embed=embed, ephemeral=True)
@@ -419,20 +462,15 @@ class Isolation(commands.Cog):
 
             user_data = isolated_data[user_id_str]
             
-            # Пытаемся найти участника на сервере (member может быть None, если он вышел)
             member = interaction.guild.get_member(user_id_int)
-            # Если get_member не нашел, пробуем fetch_member (запрос к API)
             if not member:
                 try:
                     member = await interaction.guild.fetch_member(user_id_int)
                 except:
                     member = None
 
-            # 2. Логика восстановления ролей, если пользователь на сервере
             if member:
                 roles_to_restore = []
-                # Предполагаем, что user_data — это объект или словарь с атрибутом roles
-                # Если это словарь, используйте user_data['roles']
                 stored_roles = getattr(user_data, 'roles', []) 
                 
                 for r_id in stored_roles:
@@ -445,14 +483,11 @@ class Isolation(commands.Cog):
                     if roles_to_restore:
                         await member.add_roles(*roles_to_restore, reason=f"Восстановление ролей: {unisolation_reason}")
                 except discord.Forbidden:
-                    # Если у бота нет прав управлять ролями этого юзера
                     pass
 
-            # 3. Удаляем из базы данных в любом случае
             del isolated_data[user_id_str]
             await self._save_isolated_data(isolated_data)
 
-            # Формируем ответ
             mention_str = member.mention if member else f"Пользователь с ID `{user_id_str}`"
             
             response_embed = self._create_embed(
@@ -462,7 +497,6 @@ class Isolation(commands.Cog):
             response_embed.add_field(name="Причина возвращения", value=unisolation_reason or "Не указана")
             await interaction.followup.send(embed=response_embed, ephemeral=True)
 
-            # Логгирование
             log_embed = self._create_embed("Участник был возвращён")
             log_embed.add_field(
                 name="Пользователь",
@@ -471,7 +505,6 @@ class Isolation(commands.Cog):
             )
             log_embed.add_field(name="Кем возвращён", value=interaction.user.mention, inline=True)
             
-            # Безопасное получение времени
             iso_time = getattr(user_data, 'formatted_time', 'Неизвестно')
             log_embed.add_field(name="Дата изоляции", value=iso_time, inline=True)
             log_embed.add_field(name="Причина возвращения", value=f"```{unisolation_reason or 'Не указана'}```", inline=False)
@@ -528,56 +561,85 @@ class Isolation(commands.Cog):
         if not await self.check_admin(interaction):
             await interaction.response.send_message("❌ Недостаточно прав", ephemeral=True)
             return
+        await interaction.response.defer(ephemeral=True)
 
         isolated_data = await self._load_isolated_data()
         
-        embed = self._create_embed("📋 Список изолированных участников")
+        #embed = self._create_embed("📋 Список изолированных участников")
 
-        await interaction.response.defer()
+        if not isolated_data:
+            return await interaction.followup.send(
+                embed=self._create_embed("✅ Список изолированных участников пуст", "Изолированные участники отсутствуют")
+            )
+        
+        items_for_paging = []
+        for u_id_str, u_data in isolated_data.items():
+            u_id = int(u_id_str)
+            member = interaction.guild.get_member(u_id)
+            mention = member.mention if member else f"<@{u_id}>"
+            name = member.display_name if member else f"ID: {u_id}"
 
-        if isolated_data:
-            for user_id_str, user_data in isolated_data.items():
-                user_id = int(user_id_str)
+            items_for_paging.append({
+                "name": f"👤 {name}",
+                "value": (
+                    f"Участник: {mention} `{u_id}`\n"
+                    f"Дата: {u_data.formatted_time}\n"
+                    f"Причина: `{u_data.reason}`"
+                )
+            })
+
+        view = IsolationPaginatedView(
+            data=items_for_paging,
+            author=interaction.user,
+            create_embed_func=self._create_embed
+        )
+
+        initial_embed = await view.get_page_embed()
+        await interaction.followup.send(embed=initial_embed, view=view)
+
+        # if isolated_data:
+        #     for user_id_str, user_data in isolated_data.items():
+        #         user_id = int(user_id_str)
                 
-                reason = user_data.reason
-                discord_time = user_data.formatted_time
-                isolated_by = user_data.isolated_by
+        #         reason = user_data.reason
+        #         discord_time = user_data.formatted_time
+        #         isolated_by = user_data.isolated_by
                 
-                member = interaction.guild.get_member(user_id)
-                if not member:
-                    try:
-                        member = await interaction.guild.fetch_member(user_id)
-                    except discord.NotFound:
-                        member = None
+        #         member = interaction.guild.get_member(user_id)
+        #         if not member:
+        #             try:
+        #                 member = await interaction.guild.fetch_member(user_id)
+        #             except discord.NotFound:
+        #                 member = None
                 
-                moderator_text = "Неизвестно"
-                if isolated_by:
-                    mod_member = interaction.guild.get_member(int(isolated_by))
-                    if not mod_member:
-                        try:
-                            mod_member = await interaction.guild.fetch_member(int(isolated_by))
-                        except discord.NotFound:
-                            mod_member = None
+        #         moderator_text = "Неизвестно"
+        #         if isolated_by:
+        #             mod_member = interaction.guild.get_member(int(isolated_by))
+        #             if not mod_member:
+        #                 try:
+        #                     mod_member = await interaction.guild.fetch_member(int(isolated_by))
+        #                 except discord.NotFound:
+        #                     mod_member = None
                             
-                    moderator_text = mod_member.mention if mod_member else f"<@{isolated_by}>"
+        #             moderator_text = mod_member.mention if mod_member else f"<@{isolated_by}>"
                 
-                if member:
-                    embed.add_field(
-                        name=f"{member.display_name}",
-                        value=f"Участник: {member.mention} `{user_id}`\nДата: {discord_time} \nМодератор: {moderator_text} \nПричина:`{reason}`",
-                        inline=False
-                    )
-                else:
-                    embed.add_field(
-                        name="❌ Участник покинул сервер",
-                        value=f"ID: `{user_id}`\nПричина: `{reason}`\nВремя: {discord_time}",
-                        inline=False
-                    )
+        #         if member:
+        #             embed.add_field(
+        #                 name=f"{member.display_name}",
+        #                 value=f"Участник: {member.mention} `{user_id}`\nДата: {discord_time} \nМодератор: {moderator_text} \nПричина:`{reason}`",
+        #                 inline=False
+        #             )
+        #         else:
+        #             embed.add_field(
+        #                 name="❌ Участник покинул сервер",
+        #                 value=f"ID: `{user_id}`\nПричина: `{reason}`\nВремя: {discord_time}",
+        #                 inline=False
+        #             )
             
-            await interaction.followup.send(embed=embed)
-        else:
-            embed.description = "✅ Изолированные участники отсутствуют"
-            await interaction.followup.send(embed=embed)
+        #     await interaction.followup.send(embed=embed)
+        # else:
+        #     embed.description = "✅ Изолированные участники отсутствуют"
+        #     await interaction.followup.send(embed=embed)
 
            
 
