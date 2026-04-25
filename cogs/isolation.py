@@ -414,6 +414,63 @@ class Isolation(commands.Cog):
                     except discord.Forbidden:
                         print(f"Ошибка: У бота нет прав выдать роль участнику {member.id}.")
 
+    @commands.Cog.listener()
+    async def on_member_ban(self, guild: discord.Guild, user: discord.User):
+        """Удаляет участника из изоляции при бане на сервере"""
+        print(f"DEBUG: [on_member_ban] Сработал ивент для пользователя {user.name}")
+
+
+        try: 
+
+            user_id = str(user.id)
+            print("DEBUG: Пытаюсь загрузить базу данных...")
+
+            isolated_data = await self._load_isolated_data()
+            print(f"DEBUG: База загружена. Записей: {len(isolated_data)}. Ищу {user_id}...")
+
+            if user_id in isolated_data:
+                print("DEBUG: Участник найден в базе! Начинаю удаление...")
+                user_data = isolated_data[user_id]
+
+                del isolated_data[user_id]
+
+                await self._save_isolated_data(isolated_data)
+                print("DEBUG: Файл успешно обновлен (запись удалена).")
+
+                settings_data = settings.load_settings()
+                channel_id = settings_data.get('log_channel')
+                log_channel = guild.get_channel(channel_id) if channel_id else None
+
+                # if not log_channel:
+                #     raise NoLogChannelError()
+                ("DEBUG: Формирую Embed для отправки лога...")
+                unisolate_time = time.time()
+                unisolate_time_formatted = f"<t:{int(unisolate_time)}:d>" 
+                
+
+                log_embed = self._create_embed("🔨 Участник был возвращён (по причине бана)")
+                log_embed.add_field(
+                    name="Пользователь",
+                    value=f"{user.mention}\nID: `{user.id}`",
+                    inline=False
+                )
+                log_embed.add_field(name="Кем возвращён", value=self.bot.user.mention, inline=True)            
+                iso_time = getattr(user_data, 'formatted_time', 'Неизвестно')
+                log_embed.add_field(name="Дата изоляции", value=iso_time, inline=True)
+                log_embed.add_field(name="Дата возврашения", value=unisolate_time_formatted, inline=True)
+                log_embed.add_field(name="Причина возвращения", value=f"```Автоматическое возвращение из изоляции по причине бана на сервере```", inline=False)
+
+                await log_channel.send(embed=log_embed)
+                print("DEBUG: Лог успешно отправлен в канал!")
+            else:
+                print("DEBUG: Пользователя нет в списке изоляции. Игнорирую.")
+                return
+        except Exception as e:
+            print(f"❌ КРИТИЧЕСКАЯ ОШИБКА В on_member_ban: {e}")
+            import traceback
+            traceback.print_exc()
+
+
     @app_commands.command(
         name="unisolate",
         description="Вернуть участника из изолятора (поддерживает ID)"
@@ -504,9 +561,13 @@ class Isolation(commands.Cog):
                 inline=False
             )
             log_embed.add_field(name="Кем возвращён", value=interaction.user.mention, inline=True)
+
+            unisolate_time = time.time()
+            unisolate_time_formatted = f"<t:{int(unisolate_time)}:d>" 
             
             iso_time = getattr(user_data, 'formatted_time', 'Неизвестно')
             log_embed.add_field(name="Дата изоляции", value=iso_time, inline=True)
+            log_embed.add_field(name="Дата возврашения", value=unisolate_time_formatted, inline=True)
             log_embed.add_field(name="Причина возвращения", value=f"```{unisolation_reason or 'Не указана'}```", inline=False)
             
             await log_channel.send(embed=log_embed)
