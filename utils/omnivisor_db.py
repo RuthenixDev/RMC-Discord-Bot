@@ -1,51 +1,41 @@
 import aiosqlite
-import time
+import os
 
+# Путь к файлу базы данных SQLite
 DB_PATH = "omnivisor.db"
 
 async def init_db():
-    """Создает таблицы для логов и синхронизации."""
+    # Создаем таблицы, если они отсутствуют
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute('''
             CREATE TABLE IF NOT EXISTS action_logs (
                 log_id INTEGER PRIMARY KEY AUTOINCREMENT,
-                action_type TEXT,       -- Тип действия (Вход, Бан и т.д.)
-                display_name TEXT,      -- Ник на сервере
-                username TEXT,          -- Имя аккаунта (@handle)
-                user_id INTEGER,        -- ID аккаунта
-                timestamp INTEGER,      -- Дата действия
-                joined_at INTEGER,      -- Дата захода на сервер
-                moderator_id INTEGER,   -- Кто совершил действие (NULL если бот/система)
-                reason TEXT             -- Причина
-            )
-        ''')
-        await db.execute('''
-            CREATE TABLE IF NOT EXISTS sync_snapshot (
                 action_type TEXT,
                 display_name TEXT,
                 username TEXT,
-                user_id INTEGER PRIMARY KEY,
+                user_id INTEGER,
+                timestamp INTEGER,
+                joined_at INTEGER,
+                moderator_id INTEGER,
+                reason TEXT
+            )
+        ''')
+        
+        await db.execute('''
+            CREATE TABLE IF NOT EXISTS members_sync (
+                sync_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                action_type TEXT,
+                display_name TEXT,
+                username TEXT,
+                user_id INTEGER,
                 created_at INTEGER,
                 joined_at INTEGER,
-                roles TEXT
+                roles_str TEXT
             )
         ''')
         await db.commit()
 
-async def log_action(action_type: str, display_name: str, username: str, user_id: int, timestamp: int = None, joined_at: int = 0, moderator_id: int = None, reason: str = "Не указана"):
-    """Принимает данные: 
-    action_type = , 
-    display_name = , 
-    username = , 
-    user_id = , 
-    timestamp = , 
-    joined_at = , 
-    moderator_id = , 
-    reason = ,
-    """
-    if timestamp is None:
-        timestamp = int(time.time())
-        
+async def log_action(action_type, display_name, username, user_id, timestamp, joined_at, moderator_id=None, reason=None):
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute('''
             INSERT INTO action_logs (action_type, display_name, username, user_id, timestamp, joined_at, moderator_id, reason)
@@ -54,35 +44,22 @@ async def log_action(action_type: str, display_name: str, username: str, user_id
         await db.commit()
 
 async def get_logs_for_export():
-    """Получает все накопленные логи для выгрузки в Excel (Пункт 3)."""
     async with aiosqlite.connect(DB_PATH) as db:
+        # Используем Row для возврата данных в виде словаря (ожидается в вашем коде omnivisor.py)
         db.row_factory = aiosqlite.Row
-        async with db.execute('SELECT * FROM action_logs ORDER BY timestamp ASC') as cursor:
+        async with db.execute('SELECT * FROM action_logs') as cursor:
             rows = await cursor.fetchall()
             return [dict(row) for row in rows]
 
 async def clear_action_logs():
-    """Очищает базу данных логов после генерации отчета (Пункт 3)."""
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute('DELETE FROM action_logs')
-        await db.execute('DELETE FROM sqlite_sequence WHERE name="action_logs"')
         await db.commit()
 
-
-
-async def sync_members(members_data: list):
+async def sync_members(members_to_sync):
     async with aiosqlite.connect(DB_PATH) as db:
-        await db.execute('DELETE FROM sync_snapshot')
         await db.executemany('''
-            INSERT INTO sync_snapshot (action_type, display_name, username, user_id, created_at, joined_at, roles)
+            INSERT INTO members_sync (action_type, display_name, username, user_id, created_at, joined_at, roles_str)
             VALUES (?, ?, ?, ?, ?, ?, ?)
-        ''', members_data)
+        ''', members_to_sync)
         await db.commit()
-
-async def get_sync_snapshot():
-    """Получает слепок сервера для выгрузки."""
-    async with aiosqlite.connect(DB_PATH) as db:
-        db.row_factory = aiosqlite.Row
-        async with db.execute('SELECT * FROM sync_snapshot') as cursor:
-            rows = await cursor.fetchall()
-            return [dict(row) for row in rows]

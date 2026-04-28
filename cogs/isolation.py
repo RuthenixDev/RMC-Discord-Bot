@@ -11,7 +11,7 @@ from discord.ui import View, Button
 from dataclasses import dataclass, asdict
 from typing import List, Optional, Dict
 from utils.exceptions import NoLogChannelError
-from utils.permissions import check_cog_access
+from utils.permissions import check_cog_access, check_admin_interaction
 from utils import settings_cache as settings
 from constants import RMC_EMBED_COLOR
 
@@ -19,7 +19,7 @@ isolated_users = "isolated_users.json"
 
 class IsolationPaginatedView(discord.ui.View):
     def __init__(self, data: List, author: discord.Member, create_embed_func):
-        super().__init__(timeout=180)
+        super().__init__(timeout=600)
         self.data = data
         self.author = author
         self.create_embed = create_embed_func
@@ -91,13 +91,6 @@ class Isolation(commands.Cog):
             raise commands.CheckFailure()
         return True
     
-    async def check_admin(self, interaction: discord.Interaction) -> bool:
-        """Проверяет, есть ли у пользователя админская роль"""
-        settings_data = settings.load_settings()
-        admin_roles = settings_data.get('admin_roles', [])
-        user_roles = [role.id for role in interaction.user.roles]
-        return any(role_id in admin_roles for role_id in user_roles)
-    
     async def load_isolated_data(self) -> dict:
         """Async-загрузка данных об изолированных участниках из JSON-файла"""
         if not os.path.exists(isolated_users):
@@ -151,9 +144,7 @@ class Isolation(commands.Cog):
         #log_channel = "Канал для логов"
     )
     async def isolate_settings(self, interaction: discord.Interaction, isolation_role: Optional[discord.Role]):
-        if not await self.check_admin(interaction):
-            await interaction.response.send_message("❌ Недостаточно прав", ephemeral=True)
-            return
+        await check_admin_interaction(interaction)
 
         settings_data = settings.load_settings()
 
@@ -225,9 +216,7 @@ class Isolation(commands.Cog):
         isolation_member="Участник для изоляции",
     )
     async def isolate(self, interaction: discord.Interaction, isolation_member: discord.User, isolation_reason: Optional[str]):
-        if not await self.check_admin(interaction):
-            await interaction.response.send_message("❌ Недостаточно прав", ephemeral=True)
-            return
+        await check_admin_interaction(interaction)
 
         if isolation_member.id == interaction.user.id:
             embed = self._create_embed("❌Ошибка при изоляции", "Вы не можете изолировать себя!")
@@ -246,8 +235,8 @@ class Isolation(commands.Cog):
                 isolated_data = await self.load_isolated_data()
 
                 if user_id in isolated_data:
-                    embed = self._create_embed("❌Ошибка", "Пользователь уже изолирован!")
-                    embed.set_footer(text="Проверьте список изолированных пользователей через /isolate_list.")
+                    embed = self._create_embed("❌Ошибка", "Участник уже изолирован!")
+                    embed.set_footer(text="Проверьте список изолированных участников через /isolate_list.")
                     await interaction.followup.send(embed=embed, ephemeral=True)
                     return
 
@@ -315,20 +304,20 @@ class Isolation(commands.Cog):
                 )
             
             status_text = "изолирован" if member else "изолирован заочно"
-            response_embed = self._create_embed("✅Успешная изоляция", f"Пользователь {isolation_member.mention} {status_text}!")
+            response_embed = self._create_embed("✅Успешная изоляция", f"Участник {isolation_member.mention} {status_text}!")
             response_embed.add_field(name="Причина", value=isolation_reason if isolation_reason else "❌Причина не указана")
             await interaction.followup.send(embed=response_embed, ephemeral=True)
 
             if log_channel:
                 user_data = isolated_data[user_id]
-                log_embed = self._create_embed("Пользователь был изолирован")
+                log_embed = self._create_embed("🔒 Участник изолирован")
                 log_embed.add_field(
-                    name="Изолирован",
+                    name="Участник",
                     value=f"<@{user_id}> **{user_name}**\nID: `{user_id}`\n",
                     inline=False
                 )
                 log_embed.add_field(
-                    name="Изолировал",
+                    name="Модератор",
                     value=f"{interaction.user.mention}\n`{interaction.user.id}`",
                     inline=False
                 )
@@ -373,9 +362,9 @@ class Isolation(commands.Cog):
 
             title_text = "🔒 Применение заочной изоляции" if is_preemptive else "⚠️ Попытка обхода изоляции"
             description_text = (
-                f"Пользователь {member.mention} зашёл на сервер и получил ранее назначенную роль изоляции."
+                f"Участник {member.mention} зашёл на сервер и получил ранее назначенную роль изоляции."
                 if is_preemptive else
-                f"Пользователь {member.mention} попытался снять изоляцию через перезаход, роль была возвращена."
+                f"Участник {member.mention} попытался снять изоляцию через перезаход, роль была возвращена."
             )
 
             # Ищем модератора
@@ -424,12 +413,12 @@ class Isolation(commands.Cog):
                                     description=description_text,
                                 )
                                 warning_embed.add_field(
-                                    name="Пользователь",
+                                    name="Участник",
                                     value=f"{member.mention}\n`{member}`\n`{member.id}`",
                                     inline=False
                                 )
                                 warning_embed.add_field(
-                                    name="Изолировал",
+                                    name="Модератор",
                                     value=moderator_text,
                                     inline=True
                                 )
@@ -491,13 +480,13 @@ class Isolation(commands.Cog):
         unisolate_time_formatted = f"<t:{int(unisolate_time)}:d>" 
         
 
-        log_embed = self._create_embed("🔨 Участник был возвращён (по причине бана)")
+        log_embed = self._create_embed("🔨 Участник возвращён (по причине бана)")
         log_embed.add_field(
-            name="Пользователь",
+            name="Участник",
             value=f"{user.mention}\nID: `{user.id}`",
             inline=False
         )
-        log_embed.add_field(name="Кем возвращён", value=self.bot.user.mention, inline=True)            
+        log_embed.add_field(name="Модератор", value=self.bot.user.mention, inline=True)            
         isolated_time = getattr(user_data, 'formatted_time', 'Неизвестно')
         log_embed.add_field(name="Дата изоляции", value=isolated_time, inline=True)
         log_embed.add_field(name="Дата возврашения", value=unisolate_time_formatted, inline=True)
@@ -512,13 +501,11 @@ class Isolation(commands.Cog):
     )
     @app_commands.guild_only()
     @app_commands.describe(
-        unisolation_user="Выберите пользователя из списка или введите его ID",
+        unisolation_user="Выберите участника из списка или введите его ID",
         unisolation_reason="Причина снятия изоляции"
     )
     async def unisolate(self, interaction: discord.Interaction, unisolation_user: str, unisolation_reason: Optional[str] = None):
-        if not await self.check_admin(interaction):
-            await interaction.response.send_message("❌ Недостаточно прав", ephemeral=True)
-            return
+        await check_admin_interaction(interaction)
 
         try:
             try:
@@ -550,7 +537,7 @@ class Isolation(commands.Cog):
                 isolated_data = await self.load_isolated_data() #LOCK
 
                 if user_id_str not in isolated_data:
-                    embed = self._create_embed("❌ Ошибка", "Этот пользователь не числится в списке изолированных.")
+                    embed = self._create_embed("❌ Ошибка", "Этот участник не числится в списке изолированных.")
                     await interaction.followup.send(embed=embed, ephemeral=True)
                     return
 
@@ -591,29 +578,29 @@ class Isolation(commands.Cog):
                     action_type="Возвращение",
                     display_name=display_name,
                     username=username,
-                    user_id=unisolation_user.id,
+                    user_id=user_id_int,
                     timestamp=int(time.time()),
                     joined_at=joined_at,
                     moderator_id=interaction.user.id,
                     reason=unisolation_reason if unisolation_reason else "Не указана"
                 )
 
-            mention_str = member.mention if member else f"Пользователь с ID `{user_id_str}`"
+            mention_str = member.mention if member else f"Участник с ID `{user_id_str}`"
             
             response_embed = self._create_embed(
-                "✅ Успешное возращение",
-                f"Пользователь {mention_str} был возвращён из изоляции."
+                "✅ Успешное возвращение",
+                f"Участник {mention_str} был возвращён из изоляции."
             )
             response_embed.add_field(name="Причина возвращения", value=unisolation_reason or "Не указана")
             await interaction.followup.send(embed=response_embed, ephemeral=True)
 
-            log_embed = self._create_embed("Участник был возвращён")
+            log_embed = self._create_embed("✅ Участник возвращён")
             log_embed.add_field(
-                name="Пользователь",
+                name="Участник",
                 value=f"{mention_str}\nID: `{user_id_str}`",
                 inline=False
             )
-            log_embed.add_field(name="Кем возвращён", value=interaction.user.mention, inline=True)
+            log_embed.add_field(name="Модератор", value=interaction.user.mention, inline=True)
 
             unisolate_time = time.time()
             unisolate_time_formatted = f"<t:{int(unisolate_time)}:d>" 
@@ -649,7 +636,7 @@ class Isolation(commands.Cog):
             async with aiofiles.open(isolated_users, mode='r', encoding='utf-8') as f:
                 content = await f.read()
                 isolated_data = json.loads(content) if content else {}
-        except:
+        except Exception:
             return []
 
         for user_id_str in isolated_data.keys():
@@ -672,9 +659,7 @@ class Isolation(commands.Cog):
     )
     @app_commands.guild_only()
     async def isolate_list(self, interaction: discord.Interaction):
-        if not await self.check_admin(interaction):
-            await interaction.response.send_message("❌ Недостаточно прав", ephemeral=True)
-            return
+        await check_admin_interaction(interaction)
         await interaction.response.defer(ephemeral=True)
 
         async with self._file_lock:

@@ -1,10 +1,11 @@
 import discord, os, traceback
+import aiosqlite
 from discord.ext import commands
 from discord import app_commands  
 from dotenv import load_dotenv
 from constants import RMC_EMBED_COLOR
 import healthcheck
-from utils.exceptions import NoLogChannelError
+from utils.exceptions import NoLogChannelError, AdminAccessDeniedError
 
 load_dotenv()
 TOKEN = os.getenv("TOKEN")
@@ -65,7 +66,6 @@ async def load_cogs():
                 bot.last_critical_error = tb
                 print(f"⚠ Ошибка при загрузке {cog_name}:\n{tb}")
 
-@commands.Cog.listener()
 @bot.event
 async def on_command_error(ctx, error):
     if isinstance(error, commands.CheckFailure):
@@ -79,48 +79,31 @@ async def on_command_error(ctx, error):
         return
 
     raise error
+
 @bot.tree.error
 async def on_app_command_error(interaction: discord.Interaction, error: app_commands.AppCommandError):
-    """Обработчик ошибок для слэш-команд"""
+    error_text = "❌ Произошла непредвиденная ошибка при выполнении команды."
+
+    if isinstance(error, NoLogChannelError):
+        error_text = "Канал для логов не настроен. Пожалуйста, настройте канал с помощью команды `/set_log`."
     
-    if isinstance(error, app_commands.CommandOnCooldown):
-        await interaction.response.send_message(
-            f"⏳ Команда на кулдауне. Попробуй через {error.retry_after:.1f} секунд.",
-            ephemeral=True
-        )
-        return
+    elif isinstance(error, AdminAccessDeniedError):
+        error_text = "❌ Недостаточно прав для выполнения этой команды." 
     
-    if isinstance(error, app_commands.MissingPermissions):
-        await interaction.response.send_message(
-            "❌ У вас нет прав для использования этой команды.",
-            ephemeral=True
-        )
-        return
+    elif isinstance(error, app_commands.MissingPermissions):
+        error_text = f"У вас недостаточно прав для выполнения этой команды. Требуемые права: {', '.join(error.missing_permissions)}"
     
-    if isinstance(error, app_commands.CheckFailure):
-        await interaction.response.send_message(
-            "❌ У вас нет прав для этого раздела команд. Если вы считаете это ошибкой, свяжитесь с администратором.",
-            ephemeral=True
-        )
-        return
-    
-    if isinstance(error, NoLogChannelError):    
-        error_embed = discord.Embed(
-            title="❌ Ошибка",
-            description="Канал для логов не настроен. Пожалуйста, настройте канал с помощью команды `/set_log`.",
-            color=RMC_EMBED_COLOR
-        )
-        if interaction.response.is_done():
-            await interaction.followup.send(embed=error_embed, ephemeral=True)
+    elif isinstance(error, app_commands.CommandInvokeError):
+        original = error.original
+        if isinstance(original, aiosqlite.OperationalError) and "no such table" in str(original):
+            error_text = "❌ Ошибка базы данных: таблица не найдена. Попробуйте перезапустить бота для инициализации БД."
         else:
-            await interaction.response.send_message(embed=error_embed, ephemeral=True)
-        return
-    
-    print(f"Необработанная ошибка в слэш-команде: {error}")
-    await interaction.response.send_message(
-        "❌ Произошла ошибка при выполнении команды. Попробуйте позже.",
-        ephemeral=True
-    )
+            error_text = f"❌ Произошла ошибка при выполнении команды: {str(original)}"
+
+    if interaction.response.is_done():
+        await interaction.followup.send(error_text, ephemeral=True)
+    else:
+        await interaction.response.send_message(error_text, ephemeral=True)
 
 
 

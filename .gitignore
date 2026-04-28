@@ -4,3 +4,6 @@ settings.json
 RMC-Discord-Bot.code-workspace
 isolated_users.json
 omnivisor.db
+omnivisor_logs.db
+pr_draft.md
+omnivisor_snapshots.db

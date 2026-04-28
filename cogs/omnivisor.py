@@ -5,15 +5,15 @@ import io
 import openpyxl
 from datetime import datetime
 from dataclasses import dataclass, asdict
-from discord.ext import commands
+from discord.ext import commands, tasks
 from discord import app_commands
 from utils.exceptions import NoLogChannelError
-from utils.permissions import check_cog_access
+from utils.permissions import check_cog_access, check_admin_interaction
 from utils import settings_cache as settings
 from discord.ui import View, Button
 from typing import Optional, List
 from constants import RMC_EMBED_COLOR
-from isolation import IsolatedUser
+from cogs.isolation import IsolatedUser
 
 BOT_NAME_REGEX = re.compile(r"^[a-zA-Z]+\d{4,5}$", re.IGNORECASE)
 
@@ -109,7 +109,7 @@ class SuspicionActionView(discord.ui.View):
         await interaction.response.edit_message(embed=embed, view=self)
 
     @discord.ui.button(label="Проигнорировать", style=discord.ButtonStyle.secondary)
-    async def btn_ignore(self, interaction: discord.Interaction, button: discord.ui.button):
+    async def btn_ignore(self, interaction: discord.Interaction, button: discord.ui.Button):
         for child in self.children:
             child.disabled = True
 
@@ -137,19 +137,147 @@ class Omnivisor(commands.Cog):
 
     def __init__(self, bot: commands.Bot):
         self.bot = bot
+        self.send_periodic_report.start()
+
+    def cog_unload(self):
+        self.send_periodic_report.cancel()
+
+    async def cog_load(self):
+        from utils import omnivisor_db as db
+        await db.init_db()
+
+    @tasks.loop(minutes=30)
+    async def send_periodic_report(self):
+        settings_data = settings.load_settings()
+        interval_hours = settings_data.get('report_interval_hours')
+
+        if not interval_hours or interval_hours <= 0:
+            return
+
+        last_run = settings_data.get('last_report_timestamp', 0)
+        
+        if (time.time() - last_run) < (interval_hours * 3600):
+            return
+
+        log_channel_id = settings_data.get('log_channel')
+        if not log_channel_id:
+            return
+
+        guild_to_process = None
+        for guild in self.bot.guilds:
+            if guild.get_channel(log_channel_id):
+                guild_to_process = guild
+                break
+        
+        if not guild_to_process:
+            return
+
+        print(f"Omnivisor: Running periodic report for guild {guild_to_process.name}")
+        await self._send_report_and_clear_db(guild_to_process, settings_data)
+
+        settings_data['last_report_timestamp'] = time.time()
+        settings.save_settings(settings_data)
+
+    @send_periodic_report.before_loop
+    async def before_send_periodic_report(self):
+        await self.bot.wait_until_ready()
+
+    async def _generate_report_file(self, logs: list, guild: discord.Guild) -> Optional[discord.File]:
+        if not logs:
+            return None
+
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.title = "Omnivisor Logs"
+
+        headers = [
+            "ID Лога", "Действие", "Никнейм", "Имя аккаунта", 
+            "ID Пользователя", "Дата действия", "Дата захода", 
+            "Модератор (ID)", "Причина"
+        ]
+        ws.append(headers)
+
+        mod_names_cache = {}
+
+        for row in logs:
+            action_time = datetime.fromtimestamp(row['timestamp']).strftime('%d.%m.%Y %H:%M:%S') if row['timestamp'] else "Неизвестно"
+            join_time = datetime.fromtimestamp(row['joined_at']).strftime('%d.%m.%Y %H:%M:%S') if row['joined_at'] and row['joined_at'] > 0 else "Неизвестно"
+
+            mod_name = "Система/Бот"
+            mod_id = row['moderator_id']
+
+            if mod_id:
+                if mod_id in mod_names_cache:
+                    mod_name = mod_names_cache[mod_id]
+                else:
+                    mod = guild.get_member(mod_id) 
+                    if not mod:
+                        try:
+                            mod = await self.bot.fetch_user(mod_id)
+                        except discord.NotFound:
+                            mod = None
+                    
+                    mod_name = f"{getattr(mod, 'display_name', mod.name)} (@{mod.name})" if mod else f"Неизвестно (ID: {mod_id})"
+                    mod_names_cache[mod_id] = mod_name
+
+            ws.append([
+                row['log_id'], row['action_type'], row['display_name'],
+                row['username'], str(row['user_id']), action_time,
+                join_time, mod_name, row['reason']
+            ])
+
+        buffer = io.BytesIO()
+        wb.save(buffer)
+        buffer.seek(0)
+
+        file_name = f"omnivisor_logs_{datetime.now().strftime('%d_%m_%Y_%H%M')}.xlsx"
+        return discord.File(fp=buffer, filename=file_name)
+
+    async def _send_report_and_clear_db(self, guild: discord.Guild, settings_data: dict):
+        from utils import omnivisor_db as db
+        logs = await db.get_logs_for_export()
+        if not logs:
+            print("Omnivisor: No logs to report. Skipping.")
+            return
+
+        report_file = await self._generate_report_file(logs, guild)
+        if not report_file: return
+
+        log_channel = self._get_log_channel(guild)
+        report_embed = discord.Embed(title="📅 Периодический отчёт Omnivisor", description=f"Автоматически сформированный отчёт. Содержит **{len(logs)}** записей.", color=RMC_EMBED_COLOR, timestamp=discord.utils.utcnow())
+
+        if log_channel:
+            try:
+                await log_channel.send(embed=report_embed, file=report_file)
+            except discord.Forbidden:
+                print(f"Omnivisor: Failed to send report to log channel {log_channel.id} due to permissions.")
+            report_file.fp.seek(0)
+
+        if settings_data.get('report_dm_enabled', False):
+            role_ids = set(settings_data.get('auto_stat_roles', []))
+            if role_ids:
+                dm_count = 0
+                for member in guild.members:
+                    if not role_ids.isdisjoint({role.id for role in member.roles}):
+                        try:
+                            await member.send(embed=report_embed, file=report_file)
+                            dm_count += 1
+                            report_file.fp.seek(0)
+                        except discord.Forbidden:
+                            pass
+                print(f"Omnivisor: Sent report via DM to {dm_count} users.")
+
+        if settings_data.get('report_clear_db', False):
+            await db.clear_action_logs()
+            print("Omnivisor: Action logs cleared after sending report.")
+        else:
+            print("Omnivisor: Action logs kept intact after sending report.")
 
     async def cog_check(self, ctx: commands.Context):
         allowed = await check_cog_access(ctx, self.required_access)
         if not allowed:
             raise commands.CheckFailure()
         return True
-    
-    async def check_admin(self, interaction: discord.Interaction) -> bool:
-        """Проверяет, есть ли у пользователя админская роль"""
-        settings_data = settings.load_settings()
-        admin_roles = settings_data.get('admin_roles', [])
-        user_roles = [role.id for role in interaction.user.roles]
-        return any(role_id in admin_roles for role_id in user_roles)
     
     def _get_log_channel(self, guild: discord.Guild) -> discord.TextChannel | None:
         """Загружает канал для логов из настроек"""
@@ -241,6 +369,7 @@ class Omnivisor(commands.Cog):
             moderator_id=moderator_id,
             timestamp=int(time.time()),
             joined_at=0,
+            reason=reason
         )
 
         log_channel = self._get_log_channel(member.guild)
@@ -261,12 +390,15 @@ class Omnivisor(commands.Cog):
             await log_channel.send(content=omnivisor_roles, embed=log_embed)
 
     @commands.Cog.listener()
-    async def on_member_ban(self, guild = discord.Guild, user = discord.User):
+    async def on_member_ban(self, guild: discord.Guild, user: discord.User):
         import asyncio
         from utils import omnivisor_db as db
         
         await asyncio.sleep(2)
         action_type = "Бан"
+        moderator_id = None
+        reason = "Причина не указана"
+
         try:
             async for entry in guild.audit_logs(limit=3, action=discord.AuditLogAction.ban):
                 if entry.target.id == user.id:
@@ -306,19 +438,18 @@ class Omnivisor(commands.Cog):
             await log_channel.send(content=omnivisor_roles, embed=log_embed)
 
     @app_commands.command(
-        name="export_logs",
+        name="omnivisor_export_logs",
         description="Выгрузить отчёт Omnivisor в Excel"
     )
     @app_commands.describe(
         clear_db="Очистить базу данных после выгрузки отчёта?"
     )
-    @app_commands.choices(fruits=[
+    @app_commands.choices(clear_db=[
         app_commands.Choice(name='Нет', value=0),
         app_commands.Choice(name='Да', value=1),
     ])
-    async def export_logs(self, interaction: discord.Interaction, clear_db: int = 0):
-        if not await self.check_admin(interaction):
-            return await interaction.response.send_message("❌ Недостаточно прав", ephemeral=True)
+    async def omnivisor_export_logs(self, interaction: discord.Interaction, clear_db: int = 0):
+        await check_admin_interaction(interaction)
         
         await interaction.response.defer(ephemeral=True)
 
@@ -330,68 +461,14 @@ class Omnivisor(commands.Cog):
         if not logs:
             return await interaction.followup.send("📭 База данных пуста. Действий для выгрузки нет.", ephemeral=True)
         
-        wb = openpyxl.Workbook()
-        ws = wb.active
-        ws.title = "Omnivisor Logs"
+        discord_file = await self._generate_report_file(logs, interaction.guild)
 
-        headers = [
-            "ID Лога", "Действие", "Никнейм", "Имя аккаунта", 
-            "ID Пользователя", "Дата действия", "Дата захода", 
-            "Модератор (ID)", "Причина"
-        ]
-        ws.append(headers)
-
-        mode_names_cache = {}
-
-        for row in logs:
-            action_time = "Неизвестно"
-            if row['timestamp']:
-                action_time = datetime.fromtimestamp(row['timestamp']).strftime('%d.%m.%Y %H:%M:%S')
-
-            join_time = "Неизвестно"
-            if row['joined_at'] and row['joined_at'] > 0:
-                join_time = datetime.fromtimestamp(row['joined_at']).strftime('%d.%m.%Y %H:%M:%S')
-
-            mod_name = "Система/Бот"
-            mod_id = row['moderator_id']
-
-            if mod_id:
-                if mod_id in mode_names_cache:
-                    mod_name = mode_names_cache[mod_id]
-                else:
-                    mod = interaction.guild.get_member(mod_id) 
-                    if not mod:
-                        mod = self.bot.get_user(mod_id)
-                    
-                    if mod:
-                        mod_name = f"{mod.display_name} (@{mod.name})"
-                    else:
-                        mod_name = f"Неизвестно (ID: {mod_id})"
-                    
-                    mode_names_cache[mod_id] = mod_name
-
-            ws.append([
-                row['log_id'],
-                row['action_type'],
-                row['display_name'],
-                row['username'],
-                str(row['user_id']), 
-                action_time,
-                join_time,
-                mod_name,
-                row['reason']
-            ])
-
-        buffer = io.BytesIO()
-        wb.save(buffer)
-        buffer.seek(0)
-
-        file_name = f"omnivisor_logs_{datetime.now().strftime('%d_%m_&Y')}.xlsx"
-        discord_file = discord.File(fp=buffer, filename=file_name)
+        if not discord_file:
+            return await interaction.followup.send("❌ Произошла ошибка при генерации файла отчёта.", ephemeral=True)
 
         response_embed = discord.Embed(
             title="✅ Выгрузка журнала успешно завершена!",
-            description="Файл прикреплен к сообщению.",
+            description=f"Файл с **{len(logs)}** записями прикреплен к сообщению.",
             color=RMC_EMBED_COLOR,
             timestamp=discord.utils.utcnow()
         )
@@ -406,15 +483,63 @@ class Omnivisor(commands.Cog):
         if clear_db_bool:
             await db.clear_action_logs()
    
+    @app_commands.command(
+        name="omnivisor_test_report",
+        description="Симулирует создание и отправку отчёта Omnivisor (без очистки БД)."
+    )
+    async def omnivisor_test_report(self, interaction: discord.Interaction):
+        await check_admin_interaction(interaction)
+
+        await interaction.response.defer(ephemeral=True)
+
+        from utils import omnivisor_db as db
+        logs = await db.get_logs_for_export()
+
+        if not logs:
+            return await interaction.followup.send("📭 База данных пуста. Действий для симуляции отчёта нет.", ephemeral=True)
+
+        discord_file = await self._generate_report_file(logs, interaction.guild)
+
+        if not discord_file:
+            return await interaction.followup.send("❌ Произошла ошибка при генерации файла отчёта.", ephemeral=True)
+
+        embed = discord.Embed(
+            title="🧪 Тестовый отчёт Omnivisor",
+            description=f"Это симуляция создания отчёта. Он содержит **{len(logs)}** записей.\n\n**Важно:** База данных **не была** очищена.",
+            color=discord.Color.orange(), timestamp=discord.utils.utcnow())
+        
+        settings_data = settings.load_settings()
+        log_channel = self._get_log_channel(interaction.guild)
+        
+        if log_channel:
+            try:
+                await log_channel.send(embed=embed, file=discord_file)
+            except discord.Forbidden:
+                pass
+            discord_file.fp.seek(0)
+
+        dm_count = 0
+        if settings_data.get('report_dm_enabled', False):
+            role_ids = set(settings_data.get('auto_stat_roles', []))
+            if role_ids:
+                for member in interaction.guild.members:
+                    if not role_ids.isdisjoint({role.id for role in member.roles}):
+                        try:
+                            await member.send(embed=embed, file=discord_file)
+                            dm_count += 1
+                            discord_file.fp.seek(0)
+                        except discord.Forbidden:
+                            pass
+
+        await interaction.followup.send(f"✅ Симуляция завершена. Отчёт отправлен в канал логов и в ЛС ({dm_count} пользователям).", ephemeral=True)
 
     @app_commands.command(
-       name="sync_db",
+       name="omnivisor_sync_db",
        description="Создать слепок участников сервера для дополнения Протокол-ξ."
     )
     @app_commands.guild_only()
-    async def sync_db(self, interaction: discord.Interaction):
-        if not await self.check_admin(interaction):
-            return await interaction.response.send_message("❌ Недостаточно прав", ephemeral=True)
+    async def omnivisor_sync_db(self, interaction: discord.Interaction):
+        await check_admin_interaction(interaction)
         
         await interaction.response.defer(ephemeral=True)
 
@@ -493,12 +618,20 @@ class Omnivisor(commands.Cog):
     )
     @app_commands.describe(
         notifications="Включить или выключить упоминания ролей Омнивизора",
-        add_role="Добавить роль в список для пингов",
-        remove_role="Удалить роль из списка для пингов"
+        add_role="Добавить роль в список для пингов/рассылки отчётов",
+        remove_role="Удалить роль из списка для пингов/рассылки отчётов",
+        report_interval="Интервал отправки отчёта в часах (0 для отключения)",
+        dm_reports="Отправлять отчёт в ЛС пользователям с ролями Омнивизора?",
+        clear_db="Очищать БД после отправки периодического отчёта?"
     )
-    async def omnivisor_settings(self, interaction: discord.Interaction, notifications: Optional[bool] = None, add_role: Optional[discord.Role] = None, remove_role: Optional[discord.Role] = None):
-        if not await self.check_admin(interaction):
-            return await interaction.response.send_message("❌ Недостаточно прав", ephemeral=True)
+    async def omnivisor_settings(self, interaction: discord.Interaction, 
+                                 notifications: Optional[bool] = None, 
+                                 add_role: Optional[discord.Role] = None, 
+                                 remove_role: Optional[discord.Role] = None,
+                                 report_interval: Optional[app_commands.Range[int, 0, 720]] = None,
+                                 dm_reports: Optional[bool] = None,
+                                 clear_db: Optional[bool] = None):
+        await check_admin_interaction(interaction)
 
         settings_data = settings.load_settings()
         changes = []
@@ -526,6 +659,24 @@ class Omnivisor(commands.Cog):
             else:
                 changes.append(f"⚠️ Роль {remove_role.mention} не найдена в списке")
 
+        if report_interval is not None:
+            settings_data['report_interval_hours'] = report_interval
+            if report_interval > 0:
+                changes.append(f"Интервал автоматических отчётов: **{report_interval} ч.**")
+                settings_data['last_report_timestamp'] = time.time()
+            else:
+                changes.append("Автоматические отчёты: **Отключены**")
+
+        if dm_reports is not None:
+            settings_data['report_dm_enabled'] = dm_reports
+            status = "Включена" if dm_reports else "Выключена"
+            changes.append(f"Отправка отчётов в ЛС: **{status}**")
+
+        if clear_db is not None:
+            settings_data['report_clear_db'] = clear_db
+            status = "Включена" if clear_db else "Выключена"
+            changes.append(f"Очистка БД после авто-отчёта: **{status}**")
+
         if changes:
             settings.save_settings(settings_data)
             embed = discord.Embed(
@@ -539,13 +690,26 @@ class Omnivisor(commands.Cog):
             is_enabled = settings_data.get('auto_stat_enabled', True)
             roles_ids = settings_data.get('auto_stat_roles', [])
             roles_mentions = " ".join([f"<@&{r}>" for r in roles_ids]) if roles_ids else "Не настроены"
+            report_interval_val = settings_data.get('report_interval_hours', 0)
+            dm_enabled = settings_data.get('report_dm_enabled', False)
+            clear_db_val = settings_data.get('report_clear_db', False)
             
             embed = discord.Embed(
                 title="⚙️ Текущие настройки Omnivisor",
                 color=discord.Color.blue(),
                 timestamp=discord.utils.utcnow()
             )
-            embed.add_field(name="Уведомления (пинги)", value="✅ Включены" if is_enabled else "❌ Выключены", inline=False)
+            embed.add_field(name="Уведомления о входе (пинги)", value="✅ Включены" if is_enabled else "❌ Выключены", inline=False)
             embed.add_field(name="Роли для уведомлений", value=roles_mentions, inline=False)
+            if report_interval_val > 0:
+                embed.add_field(name="Авто-отчёты", value=f"✅ Включены, раз в **{report_interval_val} ч.**", inline=True)
+            else:
+                embed.add_field(name="Авто-отчёты", value="❌ Выключены", inline=True)
+            embed.add_field(name="Отправка отчётов в ЛС", value="✅ Включена" if dm_enabled else "❌ Выключена", inline=True)
+            embed.add_field(name="Очистка БД после авто-отчёта", value="✅ Включена" if clear_db_val else "❌ Выключена", inline=True)
             embed.set_footer(text="Используйте параметры команды для изменения этих настроек")
             await interaction.response.send_message(embed=embed)
+
+
+async def setup(bot: commands.Bot):
+    await bot.add_cog(Omnivisor(bot))
