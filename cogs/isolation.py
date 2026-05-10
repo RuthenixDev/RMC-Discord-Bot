@@ -141,25 +141,30 @@ class Isolation(commands.Cog):
     @app_commands.guild_only()
     @app_commands.describe(
         isolation_role = "Роль изоляции",
-        #log_channel = "Канал для логов"
+        isolator_channel = "Канал для логов изолятора"
     )
-    async def isolate_settings(self, interaction: discord.Interaction, isolation_role: Optional[discord.Role]):
+    async def isolate_settings(self, interaction: discord.Interaction, isolation_role: Optional[discord.Role] = None, isolator_channel: Optional[discord.TextChannel] = None):
         await check_admin_interaction(interaction)
 
         settings_data = settings.load_settings()
 
-        if isolation_role is None:
+        if isolation_role is None and isolator_channel is None:
             saved_role_id = settings_data.get('isolation_role_id')
             role_object = interaction.guild.get_role(saved_role_id) if saved_role_id else None
 
             saved_channel_id = settings_data.get('log_channel')
             channel_object = interaction.guild.get_channel(saved_channel_id) if saved_channel_id else None
 
+            saved_isolator_channel_id = settings_data.get('isolator_channel_id')
+            isolator_channel_object = interaction.guild.get_channel(saved_isolator_channel_id) if saved_isolator_channel_id else None
+
             role_text = role_object.mention if role_object else "❌Не настроена"
             channel_text = channel_object.mention if channel_object else "❌Не настроен"
+            isolator_channel_text = isolator_channel_object.mention if isolator_channel_object else "❌Не настроен"
+
             embed = discord.Embed(
                 title="⚙️Сохранённые настройки",
-                description=f"В настройках сохранено следующее: \n - Роль изоляции: {role_text} \n - Канал для логов (установить в /set_log): {channel_text}",
+                description=f"В настройках сохранено следующее: \n - Роль изоляции: {role_text} \n - Общий канал для логов (установить в /set_log): {channel_text} \n - Канал изолятора: {isolator_channel_text}",
                 color=RMC_EMBED_COLOR,
                 timestamp=discord.utils.utcnow()
             )
@@ -182,13 +187,15 @@ class Isolation(commands.Cog):
                 changes.append(f"Роль {isolation_role.mention}")
                 needs_save = True
 
+        if isolator_channel:
+            settings_data['isolator_channel_id'] = isolator_channel.id
+            changes.append(f"Канал изолятора {isolator_channel.mention}")
+            needs_save = True
+
         if needs_save:
             settings.save_settings(settings_data)
 
-            if len(changes) == 1:
-                desc = f"Установлен {changes[0]}"
-            else:
-                desc = f"Установлены: \n- {changes[0]} \n- {changes[1]}"
+            desc = "Установлены:\n" + "\n".join(f"- {change}" for change in changes)
 
             embed = discord.Embed(
                 title="✅Настройки изменены успешно",
@@ -214,14 +221,24 @@ class Isolation(commands.Cog):
     @app_commands.guild_only()
     @app_commands.describe(
         isolation_member="Участник для изоляции",
+        isolate_as_bot="Изолировать как бота? (автопричина + уведомление в изолятор)",
+        isolation_reason="Причина изоляции"
     )
-    async def isolate(self, interaction: discord.Interaction, isolation_member: discord.User, isolation_reason: Optional[str]):
+    @app_commands.choices(
+        isolate_as_bot=[
+            app_commands.Choice(name="Да", value=1),
+            app_commands.Choice(name="Нет", value=0)
+        ]
+    )
+    async def isolate(self, interaction: discord.Interaction, isolation_member: discord.User, isolate_as_bot: Optional[int] = 0, isolation_reason: Optional[str] = "Не указана"):
         await check_admin_interaction(interaction)
 
         if isolation_member.id == interaction.user.id:
             embed = self._create_embed("❌Ошибка при изоляции", "Вы не можете изолировать себя!")
             await interaction.response.send_message(embed=embed, ephemeral=True)
             return
+        
+        isolate_as_bot_bool = bool(isolate_as_bot)
 
         try:
             await interaction.response.defer(ephemeral=True)
@@ -243,9 +260,11 @@ class Isolation(commands.Cog):
                 settings_data = settings.load_settings()
                 role_id = settings_data.get('isolation_role_id')
                 channel_id = settings_data.get('log_channel')
+                isolator_channel_id = settings_data.get('isolator_channel_id')
 
                 isolation_role = interaction.guild.get_role(role_id) if role_id else None
                 log_channel = interaction.guild.get_channel(channel_id) if channel_id else None 
+                isolator_channel = interaction.guild.get_channel(isolator_channel_id) if isolator_channel_id else None
 
                 if not log_channel:
                     raise NoLogChannelError()
@@ -279,6 +298,12 @@ class Isolation(commands.Cog):
                         await member.remove_roles(*isolation_member_roles)
                     await member.add_roles(isolation_role, reason=f"Изолирован {interaction.user}: {isolation_reason}")
 
+                if isolate_as_bot_bool:
+                    isolation_reason = "Подозрения, что бот."
+                    if isolator_channel:
+                        await isolator_channel.send(f"{isolation_member.mention} Доброго времени суток, это дополнительная проверка, чтобы убедиться, что вы не бот. Ответьте на это сообщение любым образом, чтобы мы могли идентифицировать в вас человека.")
+
+
                 isolated_data[user_id] = IsolatedUser(
                     roles=role_ids,
                     isolated_at=time.time(),
@@ -302,6 +327,8 @@ class Isolation(commands.Cog):
                     moderator_id=interaction.user.id,
                     reason=isolation_reason if isolation_reason else "Не указана"
                 )
+
+                    
             
             status_text = "изолирован" if member else "изолирован заочно"
             response_embed = self._create_embed("✅Успешная изоляция", f"Участник {isolation_member.mention} {status_text}!")
