@@ -1,6 +1,7 @@
 import discord
 import time
 import re
+import asyncio
 import io
 import openpyxl
 from datetime import datetime
@@ -74,7 +75,7 @@ class SuspicionActionView(discord.ui.View):
     async def btn_isolate(self, interaction: discord.Interaction, button: discord.ui.Button):   
         user_roles = [
             role for role in self.target_member.roles 
-            if not role.is_default() and not role.managed
+            if not role.is_default() and not role.managed and role < interaction.guild.me.top_role
         ]
         user_role_ids = [role.id for role in user_roles]
         isolation_cog = self.bot.get_cog("Isolation")
@@ -98,9 +99,12 @@ class SuspicionActionView(discord.ui.View):
         isolation_role = interaction.guild.get_role(isolation_role_id)
 
         if isolation_role:
-            if user_roles:
-                await self.target_member.remove_roles(*user_roles, reason=f"Изолирован {interaction.user} через Omnivisor.")
-            await self.target_member.add_roles(isolation_role, reason=f"Изолирован {interaction.user} через Omnivisor.")
+            try:
+                if user_roles:
+                    await self.target_member.remove_roles(*user_roles, reason=f"Изолирован {interaction.user} через Omnivisor.")
+                await self.target_member.add_roles(isolation_role, reason=f"Изолирован {interaction.user} через Omnivisor.")
+            except discord.Forbidden:
+                pass # Игнорируем недостаток прав, чтобы кнопка успела изменить состояние
 
         from utils import omnivisor_db as db
         await db.log_action(
@@ -373,8 +377,7 @@ class Omnivisor(commands.Cog):
         omnivisor_roles = self._get_omnivisor_roles()
         
         if not log_channel:
-            pass
-            # raise NoLogChannelError()
+            return # Предотвращаем падение с AttributeError, если канал не задан
 
         user_name = member.global_name or member.name
         
@@ -406,7 +409,6 @@ class Omnivisor(commands.Cog):
 
     @commands.Cog.listener()
     async def on_member_remove(self, member: discord.Member):
-        import asyncio
         from utils import omnivisor_db as db
         await asyncio.sleep(2)
 
@@ -454,7 +456,6 @@ class Omnivisor(commands.Cog):
 
     @commands.Cog.listener()
     async def on_member_ban(self, guild: discord.Guild, user: discord.User):
-        import asyncio
         from utils import omnivisor_db as db
         
         await asyncio.sleep(2)

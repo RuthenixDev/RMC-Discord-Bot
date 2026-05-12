@@ -4,11 +4,10 @@ from discord import app_commands
 from utils.permissions import check_cog_access
 from utils import settings_cache as settings
 from discord.ui import View, Button
-import sys
-import os
 from constants import RMC_EMBED_COLOR
 
-
+#TODO: сделать логику сохранения кнопок ответа на репорт чтобы они не умирали при перезагрузке
+# что-то сделать с архивацией ветки (получить ID через self.report_message.id)
 class Reports(commands.Cog):
     required_access = "admin"
 
@@ -558,6 +557,7 @@ class ReportReasonModal(discord.ui.Modal, title="Отправка жалобы")
 
 # ====== Context-menu (Message) ======
 @app_commands.context_menu(name="Пожаловаться")
+@app_commands.guild_only()
 async def context_report(interaction: discord.Interaction, message: discord.Message):
     cog: Reports | None = interaction.client.get_cog("Reports")
     if cog is None:

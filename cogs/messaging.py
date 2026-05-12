@@ -9,6 +9,8 @@ from discord.ui import View, Button
 from typing import Optional
 from constants import RMC_EMBED_COLOR
 
+#TODO: Добавиь кастомизацию ембед в лс
+
 class ResponseButton(discord.ui.View):
     def __init__(self, target_user: discord.User, original_author: discord.User, original_message: str):
         super().__init__(timeout=86400)
@@ -31,15 +33,13 @@ class ResponseButton(discord.ui.View):
         modal = ResponseModal(self, self.original_author, self.original_message)
         await interaction.response.send_modal(modal)
 
-    async def disable_button(self, interaction):
-        channel = interaction.client.get_channel(self.channel_id)
-        if channel:
+    async def disable_button(self, interaction: discord.Interaction):
+        for child in self.children:
+            child.disabled = True
+        if interaction.message:
             try:
-                message = await channel.fetch_message(self.message_id)
-                for child in message.components[0].children:
-                    child.disabled = True
-                await message.edit(view=self)
-            except:
+                await interaction.message.edit(view=self)
+            except discord.HTTPException:
                 pass
 
 class ResponseModal(discord.ui.Modal, title="Ответ на сообщение"):
@@ -582,7 +582,7 @@ class Messaging(commands.Cog):
                 if embed_author_bool:
                     send_embed.set_author(
                         name=interaction.user.display_name,
-                        icon_url=interaction.user.avatar.url if interaction.user.avatar.url else None
+                        icon_url=interaction.user.display_avatar.url
                     )
 
                 await target_channel.send(embed=send_embed)

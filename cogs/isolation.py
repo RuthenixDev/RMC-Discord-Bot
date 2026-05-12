@@ -51,19 +51,20 @@ class IsolationPaginatedView(discord.ui.View):
     @discord.ui.button(label="◀️ Назад", style=discord.ButtonStyle.secondary)
     async def previous_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         if interaction.user != self.author: return await interaction.response.send_message("❌ Эта кнопка не для тебя!", ephemeral=True)
-        # if self.current_page > 0:
 
-        self.current_page -= 1
-        self.update_buttons()
-        await interaction.response.edit_message(embed=await self.get_page_embed(), view=self)
+        if self.current_page > 0:
+            self.current_page -= 1
+            self.update_buttons()
+            await interaction.response.edit_message(embed=await self.get_page_embed(), view=self)
+
     @discord.ui.button(label="▶️ Вперед", style=discord.ButtonStyle.secondary)
     async def next_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         if interaction.user != self.author: return await interaction.response.send_message("❌ Эта кнопка не для тебя!", ephemeral=True)
-        # if (self.current_page + 1) * self.per_page < len(self.data):
 
-        self.current_page += 1
-        self.update_buttons()
-        await interaction.response.edit_message(embed=await self.get_page_embed(), view=self)
+        if (self.current_page + 1) * self.per_page < len(self.data):
+            self.current_page += 1
+            self.update_buttons()
+            await interaction.response.edit_message(embed=await self.get_page_embed(), view=self)
 
 
 @dataclass
@@ -278,6 +279,11 @@ class Isolation(commands.Cog):
                 role_ids = []
                 
                 if member:
+                    if member.top_role >= interaction.guild.me.top_role or member == interaction.guild.owner:
+                        embed = self._create_embed("❌ Ошибка при изоляции", "У участника есть роль, которая не может быть снята ботом из-за недостатка прав доступа.")
+                        await interaction.followup.send(embed=embed, ephemeral=True)
+                        return
+
                     admin_roles = settings_data.get('admin_roles', [])
                     isolation_member_roles = []
                     
@@ -481,45 +487,40 @@ class Isolation(commands.Cog):
 
                 await self.save_isolated_data(isolated_data)
 
-            from utils import omnivisor_db as db
-            # display_name = member.display_name if member else unisolation_user.name
-            # username = unisolation_user.name
-            # joined_at = int(member.joined_at.timestamp()) if unisolation_user and unisolation_user.joined_at else 0
+                from utils import omnivisor_db as db
 
-            await db.log_action(
-                action_type="Возвращение",
-                display_name=user.global_name,
-                username=user.name,
-                user_id=user.id,
-                timestamp=int(time.time()),
-                joined_at=0,
-                moderator_id=self.bot.user.id,
-                reason="Автоматическое возвращение из изоляции по причине бана на сервере"
-            )
-                
-        settings_data = settings.load_settings()
-        channel_id = settings_data.get('log_channel')
-        log_channel = guild.get_channel(channel_id) if channel_id else None
+                await db.log_action(
+                    action_type="Возвращение",
+                    display_name=user.global_name,
+                    username=user.name,
+                    user_id=user.id,
+                    timestamp=int(time.time()),
+                    joined_at=0,
+                    moderator_id=self.bot.user.id,
+                    reason="Автоматическое возвращение из изоляции по причине бана на сервере"
+                )
+                    
+                settings_data = settings.load_settings()
+                channel_id = settings_data.get('log_channel')
+                log_channel = guild.get_channel(channel_id) if channel_id else None
 
-        # if not log_channel:
-        #     raise NoLogChannelError()
-        unisolate_time = time.time()
-        unisolate_time_formatted = f"<t:{int(unisolate_time)}:d>" 
-        
+                if log_channel:
+                    unisolate_time = time.time()
+                    unisolate_time_formatted = f"<t:{int(unisolate_time)}:d>" 
+                    
+                    log_embed = self._create_embed("🔨 Участник возвращён (по причине бана)")
+                    log_embed.add_field(
+                        name="Участник",
+                        value=f"{user.mention}\nID: `{user.id}`",
+                        inline=False
+                    )
+                    log_embed.add_field(name="Модератор", value=self.bot.user.mention, inline=True)            
+                    isolated_time = getattr(user_data, 'formatted_time', 'Неизвестно')
+                    log_embed.add_field(name="Дата изоляции", value=isolated_time, inline=True)
+                    log_embed.add_field(name="Дата возврашения", value=unisolate_time_formatted, inline=True)
+                    log_embed.add_field(name="Причина возвращения", value=f"```Автоматическое возвращение из изоляции по причине бана на сервере```", inline=False)
 
-        log_embed = self._create_embed("🔨 Участник возвращён (по причине бана)")
-        log_embed.add_field(
-            name="Участник",
-            value=f"{user.mention}\nID: `{user.id}`",
-            inline=False
-        )
-        log_embed.add_field(name="Модератор", value=self.bot.user.mention, inline=True)            
-        isolated_time = getattr(user_data, 'formatted_time', 'Неизвестно')
-        log_embed.add_field(name="Дата изоляции", value=isolated_time, inline=True)
-        log_embed.add_field(name="Дата возврашения", value=unisolate_time_formatted, inline=True)
-        log_embed.add_field(name="Причина возвращения", value=f"```Автоматическое возвращение из изоляции по причине бана на сервере```", inline=False)
-
-        await log_channel.send(embed=log_embed)
+                    await log_channel.send(embed=log_embed)
 
 
     @app_commands.command(
