@@ -124,7 +124,7 @@ class Messaging(commands.Cog):
         return True
     
     @app_commands.command(
-        name="dm_embed_user",
+        name="send_dm_embed",
         description="Отправить личное embed-сообщение участнику"
     )
     @app_commands.guild_only()
@@ -142,9 +142,10 @@ class Messaging(commands.Cog):
         app_commands.Choice(name="Да", value=1),
         app_commands.Choice(name="Нет", value=0),
     ])
-    async def dm_embed_user(self, interaction: discord.Interaction, member: discord.Member, message: str, anonymous: int, allow_response: int = 0):
+    async def send_dm_embed(self, interaction: discord.Interaction, member: discord.Member, message: str, anonymous: int, allow_response: int = 0):
         
         await check_admin_interaction(interaction)
+        await interaction.response.defer(ephemeral=True)
 
         is_anonymous = bool(anonymous)
         is_allow_response = bool(allow_response)
@@ -195,7 +196,7 @@ class Messaging(commands.Cog):
                 description=f"Участник {member.mention} получил сообщение.",
                 color=RMC_EMBED_COLOR
             )
-            await interaction.response.send_message(embed=embed, ephemeral=True)
+            await interaction.followup.send(embed=embed, ephemeral=True)
 
             if log_channel:
                 timestamp = time.time()
@@ -252,14 +253,14 @@ class Messaging(commands.Cog):
                 description=f"Не могу отправить сообщение {member.mention}. Закрыты ЛС.",
                 color=RMC_EMBED_COLOR
             )
-            await interaction.response.send_message(embed=embed, ephemeral=True)
+            await interaction.followup.send(embed=embed, ephemeral=True)
         except Exception as e:
             embed = discord.Embed(
                 title="❌ Ошибка",
                 description=f"Не удалось отправить сообщение: {e}",
                 color=RMC_EMBED_COLOR
             )
-            await interaction.response.send_message(embed=embed, ephemeral=True)
+            await interaction.followup.send(embed=embed, ephemeral=True)
 
     @app_commands.command(
         name="send_msg",
@@ -275,6 +276,7 @@ class Messaging(commands.Cog):
     async def send_msg(self, interaction: discord.Interaction, channel: discord.TextChannel | discord.VoiceChannel | discord.Thread, content: str, reply_on: Optional[str] = None, channel_link: Optional[str] = None):
         
         await check_admin_interaction(interaction)
+        await interaction.response.defer(ephemeral=True)
 
         target_channel = channel
 
@@ -285,11 +287,11 @@ class Messaging(commands.Cog):
                 found_channel = interaction.guild.get_channel(c_id) or interaction.guild.get_thread(c_id)
                 if not found_channel:
                     embed = discord.Embed(title="❌ Ошибка", description="Канал или ветка по ссылке `channel_link` не найдены.", color=RMC_EMBED_COLOR)
-                    return await interaction.response.send_message(embed=embed, ephemeral=True)
+                    return await interaction.followup.send(embed=embed, ephemeral=True)
                 target_channel = found_channel
             except Exception:
                 embed = discord.Embed(title="❌ Ошибка", description="Неверный формат ссылки `channel_link`.", color=RMC_EMBED_COLOR)
-                return await interaction.response.send_message(embed=embed, ephemeral=True)
+                return await interaction.followup.send(embed=embed, ephemeral=True)
 
         reply_message = None
         if reply_on:
@@ -300,12 +302,12 @@ class Messaging(commands.Cog):
                 msg_channel = interaction.guild.get_channel(msg_channel_id) or interaction.guild.get_thread(msg_channel_id)
                 if not msg_channel:
                     embed = discord.Embed(title="❌ Ошибка", description="Не удалось найти канал для ответа. Проверьте ссылку `reply_on`.", color=RMC_EMBED_COLOR)
-                    return await interaction.response.send_message(embed=embed, ephemeral=True)
+                    return await interaction.followup.send(embed=embed, ephemeral=True)
                 reply_message = await msg_channel.fetch_message(msg_id)
                 target_channel = msg_channel
             except Exception:
                 embed = discord.Embed(title="❌ Ошибка", description="Неверный формат ссылки на сообщение `reply_on`.", color=RMC_EMBED_COLOR)
-                return await interaction.response.send_message(embed=embed, ephemeral=True)
+                return await interaction.followup.send(embed=embed, ephemeral=True)
 
         perms_target = target_channel.parent if isinstance(target_channel, discord.Thread) else target_channel
         perms = perms_target.permissions_for(interaction.guild.me)
@@ -313,7 +315,7 @@ class Messaging(commands.Cog):
 
         if not can_send:
             embed = discord.Embed(title="❌ Ошибка", description=f"У бота нет прав писать в {target_channel.mention}", color=RMC_EMBED_COLOR)
-            return await interaction.response.send_message(embed=embed, ephemeral=True)
+            return await interaction.followup.send(embed=embed, ephemeral=True)
 
         settings_data = settings.load_settings()
         channel_id = settings_data.get('log_channel')
@@ -332,7 +334,7 @@ class Messaging(commands.Cog):
                 await target_channel.send(content)
 
             embed = discord.Embed(title="✅ Сообщение отправлено", description=f"Сообщение отправлено в {target_channel.mention} с содержимым: ```{content}```", color=RMC_EMBED_COLOR, timestamp=discord.utils.utcnow())
-            await interaction.response.send_message(embed=embed, ephemeral=True)
+            await interaction.followup.send(embed=embed, ephemeral=True)
 
             log_embed = discord.Embed(title=f"Модератор отправил сообщение через бота", color=RMC_EMBED_COLOR)
             log_embed.add_field(name="✍️ Автор сообщения", value=f"{interaction.user.mention} ({interaction.user.id})", inline=False)
@@ -340,16 +342,12 @@ class Messaging(commands.Cog):
             log_embed.add_field(name="📝 Текст сообщения", value=f"```{content}```", inline=False)
             log_embed.add_field(name="📅 Дата", value=f"{discord_time}", inline=True)
             if reply_message:
-                log_embed.add_field(name="💬 Ответ на", value=f"сообщение", inline=True)
-            
+                log_embed.add_field(name="💬 Ответ на", value=f"[сообщение]({reply_on})", inline=True)
             await log_channel.send(embed=log_embed)
 
         except Exception as e:
             embed = discord.Embed(title="❌ Ошибка", description=f"У бота не получилось отправить сообщение из-за ошибки: ```{e}```", color=RMC_EMBED_COLOR)
-            if interaction.response.is_done():
-                await interaction.followup.send(embed=embed, ephemeral=True)
-            else:
-                await interaction.response.send_message(embed=embed, ephemeral=True)
+            await interaction.followup.send(embed=embed, ephemeral=True)
 
     async def color_autocomplete(self, interaction: discord.Interaction, current: str):
         preset_colors = {
@@ -418,6 +416,7 @@ class Messaging(commands.Cog):
     async def send_embed(self, interaction: discord.Interaction, color: str, title: Optional[str], timestamp_on: int, content: str, footer_content: Optional[str], embed_author: int, channel: Optional[discord.TextChannel | discord.VoiceChannel | discord.Thread] = None, image_link: Optional[str] = None, channel_link: Optional[str] = None):
         
         await check_admin_interaction(interaction)
+        await interaction.response.defer(ephemeral=True)
 
         target_channel = channel
         if channel_link:
@@ -427,15 +426,15 @@ class Messaging(commands.Cog):
                 found_channel = interaction.guild.get_channel(c_id) or interaction.guild.get_thread(c_id)
                 if not found_channel:
                     embed = discord.Embed(title="❌ Ошибка", description="Канал/ветка по ссылке `channel_link` не найдены.", color=RMC_EMBED_COLOR)
-                    return await interaction.response.send_message(embed=embed, ephemeral=True)
+                    return await interaction.followup.send(embed=embed, ephemeral=True)
                 target_channel = found_channel
             except Exception:
                 embed = discord.Embed(title="❌ Ошибка", description="Неверный формат ссылки `channel_link`.", color=RMC_EMBED_COLOR)
-                return await interaction.response.send_message(embed=embed, ephemeral=True)
+                return await interaction.followup.send(embed=embed, ephemeral=True)
         
         if not target_channel:
             embed = discord.Embed(title="❌ Ошибка", description="Вы должны указать канал (`channel`) или ссылку на канал (`channel_link`).", color=RMC_EMBED_COLOR)
-            return await interaction.response.send_message(embed=embed, ephemeral=True)
+            return await interaction.followup.send(embed=embed, ephemeral=True)
         
         settings_data = settings.load_settings()
         channel_id = settings_data.get('log_channel')
@@ -484,7 +483,7 @@ class Messaging(commands.Cog):
                             f"• Или выберите из списка",
                 color=RMC_EMBED_COLOR
             )
-            await interaction.response.send_message(embed=embed, ephemeral=True)
+            await interaction.followup.send(embed=embed, ephemeral=True)
             return
 
         embed_color = color_int
@@ -588,7 +587,7 @@ class Messaging(commands.Cog):
 
                 await target_channel.send(embed=send_embed)
 
-                await interaction.response.send_message(embed=embed, ephemeral=True)
+                await interaction.followup.send(embed=embed, ephemeral=True)
                 await log_channel.send(embed=log_embed)
             else:
                 raise NoLogChannelError()
@@ -598,7 +597,7 @@ class Messaging(commands.Cog):
                 description=f"У бота нет прав писать в канал {target_channel.mention}",
                 color=RMC_EMBED_COLOR
             )
-            await interaction.response.send_message(embed=embed, ephemeral=True)
+            await interaction.followup.send(embed=embed, ephemeral=True)
             return  
         except Exception as e:
             embed = discord.Embed(
@@ -606,7 +605,7 @@ class Messaging(commands.Cog):
                 description=f"У бота не получилось отправить сообщение из-за ошибки: ```{e}```",
                 color=RMC_EMBED_COLOR
             )
-            await interaction.response.send_message(embed=embed, ephemeral=True)
+            await interaction.followup.send(embed=embed, ephemeral=True)
             return 
 
     @app_commands.command(
@@ -620,6 +619,7 @@ class Messaging(commands.Cog):
     )
     async def react_on_msg(self, interaction: discord.Interaction, message_link: str, emoji: str):
         await check_admin_interaction(interaction)
+        await interaction.response.defer(ephemeral=True)
         
         settings_data = settings.load_settings()
         channel_id = settings_data.get('log_channel')
@@ -642,7 +642,7 @@ class Messaging(commands.Cog):
                         description=f"У бота не получилось найти канал для отправки реакции",
                         color=RMC_EMBED_COLOR
                     )
-                    await interaction.response.send_message(embed=embed, ephemeral=True)
+                    await interaction.followup.send(embed=embed, ephemeral=True)
                     return 
             
                 message = await channel.fetch_message(message_id)
@@ -654,7 +654,7 @@ class Messaging(commands.Cog):
                     color=RMC_EMBED_COLOR,
                     timestamp=discord.utils.utcnow()
                 )
-                await interaction.response.send_message(embed=embed, ephemeral=True)
+                await interaction.followup.send(embed=embed, ephemeral=True)
 
                 log_embed = discord.Embed(
                     title=f"Модератор поставил реакцию на сообщение через бота",
@@ -694,7 +694,7 @@ class Messaging(commands.Cog):
                     description=f"У бота не получилось отправить реакцию из-за прав канала: ```{e}```",
                     color=RMC_EMBED_COLOR
                 )
-                await interaction.response.send_message(embed=embed, ephemeral=True)
+                await interaction.followup.send(embed=embed, ephemeral=True)
                 return 
             except Exception as e:
                 embed = discord.Embed(
@@ -702,13 +702,13 @@ class Messaging(commands.Cog):
                     description=f"У бота не получилось отправить реакцию из-за ошибки: ```{e}```",
                     color=RMC_EMBED_COLOR
                 )
-                await interaction.response.send_message(embed=embed, ephemeral=True)
+                await interaction.followup.send(embed=embed, ephemeral=True)
                 return 
         else:    
             raise NoLogChannelError()
 
     @app_commands.command(
-        name="dm_user",
+        name="send_dm_msg",
         description="Отправить сообщение в личные сообщения участника"
     )
     @app_commands.guild_only()
@@ -716,8 +716,9 @@ class Messaging(commands.Cog):
         member = "Участник для отправки сообщения",
         content = "Содержимое сообщения"
     )
-    async def dm_user(self, interaction: discord.Interaction, member: discord.Member, content: str):
+    async def send_dm_msg(self, interaction: discord.Interaction, member: discord.Member, content: str):
         await check_admin_interaction(interaction)
+        await interaction.response.defer(ephemeral=True)
 
 
         settings_data = settings.load_settings()
@@ -760,7 +761,7 @@ class Messaging(commands.Cog):
                     inline=True
                 )
                 await member.send(content)
-                await interaction.response.send_message(embed=embed, ephemeral=True)
+                await interaction.followup.send(embed=embed, ephemeral=True)
                 await log_channel.send(embed=log_embed)
             else:
                 raise NoLogChannelError()
@@ -770,7 +771,7 @@ class Messaging(commands.Cog):
                 description=f"Бот не смог отправить сообщение {member.mention}. Закрыты ЛС.",
                 color=RMC_EMBED_COLOR
             )
-            await interaction.response.send_message(embed=embed, ephemeral=True)
+            await interaction.followup.send(embed=embed, ephemeral=True)
             return  
         except Exception as e:
             embed = discord.Embed(
@@ -778,7 +779,7 @@ class Messaging(commands.Cog):
                 description=f"У бота не получилось отправить сообщение из-за ошибки: ```{e}```",
                 color=RMC_EMBED_COLOR
             )
-            await interaction.response.send_message(embed=embed, ephemeral=True)
+            await interaction.followup.send(embed=embed, ephemeral=True)
             return 
         
         

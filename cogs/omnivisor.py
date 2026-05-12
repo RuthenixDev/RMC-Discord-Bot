@@ -15,7 +15,15 @@ from typing import Optional, List
 from constants import RMC_EMBED_COLOR
 from cogs.isolation import IsolatedUser
 
-BOT_NAME_REGEX = re.compile(r"^[a-zA-Z]+\d{4,5}$", re.IGNORECASE)
+BOT_NAME_REGEXES = [
+    re.compile(r"^[a-zA-Z._]+\d{3,8}\.?$", re.IGNORECASE),         # Покрывает: duelist_96035, nikitos511., echoexplorer05448
+    re.compile(r"^[a-zA-Z_]+\.[a-zA-Z]{3,5}$", re.IGNORECASE),     # Покрывает: usagii.jjj
+    re.compile(r"^[a-zA-Z]+\d+[._]+\d+$", re.IGNORECASE),          # Покрывает: asd2099._19909
+    re.compile(r"^[\d._]+$"),                                      # Только цифры и знаки: 12345_67890
+    re.compile(r"[bcdfghjklmnpqrstvwxz]{6,}", re.IGNORECASE),      # Набор из 6+ согласных подряд: dfghjkl
+    re.compile(r"^(?:[a-zA-Z]+\d+){3,}[a-zA-Z]*$", re.IGNORECASE), # Чередование букв и цифр: a1b2c3d4
+    re.compile(r"^[a-f0-9]{10,}$", re.IGNORECASE)                  # Сгенерированные хэши: a8b4f2c9e1
+]
 
 
 async def evaluate_suspicion(member: discord.Member) -> tuple[float, list]:
@@ -25,11 +33,14 @@ async def evaluate_suspicion(member: discord.Member) -> tuple[float, list]:
     account_age_seconds = (discord.utils.utcnow() - member.created_at).total_seconds()
 
     if account_age_seconds < 86400:
+        score += 3
+        reasons.append("Аккаунту меньше 24 часов (+3)")
+    elif account_age_seconds < 2592000: # 30 дней
         score += 2
-        reasons.append("Аккаунту меньше 24 часов (+2)")
-    elif 86400 <= account_age_seconds <= 259200:
+        reasons.append("Аккаунту меньше месяца (+2)")
+    elif account_age_seconds < 31536000: # 365 дней
         score += 1
-        reasons.append("Аккаунту от 1 до 3 дней (+1)")
+        reasons.append("Аккаунту меньше года (+1)")
 
     if member.avatar is None:
         score += 1
@@ -38,13 +49,17 @@ async def evaluate_suspicion(member: discord.Member) -> tuple[float, list]:
         score -= 1.5
         reasons.append("У аккаунта анимированный аватар (-1.5)")
 
+    if member.global_name is None:
+        score += 1
+        reasons.append("У аккаунта не установлено отображаемое имя (+1)")
+
     if not member.public_flags.value:
         score += 0.5
         reasons.append("У аккаунта нет значков профиля (+0.5)")
 
-    if BOT_NAME_REGEX.match(member.name):
-        score += 2
-        reasons.append("Ник попадает под паттерн ботов (+2)")
+    if any(pattern.match(member.name) for pattern in BOT_NAME_REGEXES):
+        score += 3
+        reasons.append("Ник попадает под паттерн спам-ботов (+3)")
 
     return score, reasons
 
@@ -61,12 +76,13 @@ class SuspicionActionView(discord.ui.View):
             role for role in self.target_member.roles 
             if not role.is_default() and not role.managed
         ]
+        user_role_ids = [role.id for role in user_roles]
         isolation_cog = self.bot.get_cog("Isolation")
         if not isolation_cog:
             return await interaction.response.send_message("❌ Ошибка: Модуль изоляции не найден.", ephemeral=True)
 
         isolated_user = IsolatedUser(
-            roles=user_roles,
+            roles=user_role_ids,
             isolated_at=time.time(),
             isolated_by=interaction.user.id,
             reason=f"[Omnivisor] Изолирован из-за высокого уровна подозрительности {self.score}"
@@ -74,7 +90,7 @@ class SuspicionActionView(discord.ui.View):
 
         async with isolation_cog._file_lock:
             isolated_data = await isolation_cog.load_isolated_data()
-            isolated_data[str(self.target_member.id)] = asdict(isolated_user)
+            isolated_data[str(self.target_member.id)] = isolated_user
             await isolation_cog.save_isolated_data(isolated_data)
 
         settings_data = settings.load_settings()
@@ -137,6 +153,7 @@ class Omnivisor(commands.Cog):
 
     def __init__(self, bot: commands.Bot):
         self.bot = bot
+        self.invites_cache = {}
         self.send_periodic_report.start()
 
     def cog_unload(self):
@@ -145,6 +162,16 @@ class Omnivisor(commands.Cog):
     async def cog_load(self):
         from utils import omnivisor_db as db
         await db.init_db()
+        self.bot.loop.create_task(self.update_invite_cache_startup())
+
+    async def update_invite_cache_startup(self):
+        await self.bot.wait_until_ready()
+        for guild in self.bot.guilds:
+            try:
+                invites = await guild.invites()
+                self.invites_cache[guild.id] = {invite.code: invite for invite in invites}
+            except discord.Forbidden:
+                self.invites_cache[guild.id] = {}
 
     @tasks.loop(minutes=30)
     async def send_periodic_report(self):
@@ -298,10 +325,36 @@ class Omnivisor(commands.Cog):
         omnivisor_roles = " ".join([f"<@&{r}>" for r in omnivisor_roles_ids])
         return omnivisor_roles
 
+    @commands.Cog.listener()
+    async def on_invite_create(self, invite: discord.Invite):
+        if invite.guild:
+            if invite.guild.id not in self.invites_cache:
+                self.invites_cache[invite.guild.id] = {}
+            self.invites_cache[invite.guild.id][invite.code] = invite
+
+    @commands.Cog.listener()
+    async def on_invite_delete(self, invite: discord.Invite):
+        if invite.guild and invite.guild.id in self.invites_cache:
+            self.invites_cache[invite.guild.id].pop(invite.code, None)
     
     @commands.Cog.listener()
     async def on_member_join(self, member: discord.Member):
         from utils import omnivisor_db as db
+
+        used_invite = None
+        try:
+            new_invites = await member.guild.invites()
+            old_invites = self.invites_cache.get(member.guild.id, {})
+            
+            for invite in new_invites:
+                old_invite = old_invites.get(invite.code)
+                if old_invite and invite.uses > old_invite.uses:
+                    used_invite = invite
+                    break
+                    
+            self.invites_cache[member.guild.id] = {inv.code: inv for inv in new_invites}
+        except discord.Forbidden:
+            pass
 
         score, reasons = await evaluate_suspicion(member)
 
@@ -322,19 +375,29 @@ class Omnivisor(commands.Cog):
         if not log_channel:
             pass
             # raise NoLogChannelError()
+
+        user_name = member.global_name or member.name
         
         log_embed = discord.Embed(
             title="📥 Новый участник на сервере",
             color=RMC_EMBED_COLOR,
             timestamp=discord.utils.utcnow()
         )
-        log_embed.add_field(name="Участник", value=f"{member.mention}\n`{member.id}`\n@{member.name}", inline=True)
+        log_embed.add_field(name="Участник", value=f"{member.mention}\nID: `{member.id}`\n@{user_name}", inline=True)
         log_embed.add_field(name="📅 Даты", value=f"Дата создания аккаунта: <t:{int(member.created_at.timestamp())}:d> | Зашёл на сервер: <t:{int(member.joined_at.timestamp())}:d>", inline=True)
-        reasons_text = "\n".join(reasons) if reasons else "Подозрительных признаков не найдено"
+
+        if used_invite:
+            inviter_mention = used_invite.inviter.mention if used_invite.inviter else "Неизвестен"
+            invite_info = f"**Ссылка:** {used_invite.url}\n**Создатель:** {inviter_mention}\n**Использований:** {used_invite.uses}"
+        else:
+            invite_info = "Ссылка неизвестна (vanity URL, виджет или API не успел обновиться)"
+        log_embed.add_field(name="🔗 Приглашение", value=invite_info, inline=False)
+
+        reasons_text = "\n".join(reasons) if reasons else "Подозрений нет"
         log_embed.add_field(name=f"📊 Индекс подозрения: {score}", value=f"```{reasons_text}```", inline=False)
         log_embed.set_thumbnail(url=member.display_avatar.url)
 
-        if score >= 2:
+        if score >= 3:
             ping_roles = " ".join([f"<@&{r}>" for r in settings_data.get('admin_roles', [])])
             view = SuspicionActionView(member, self.bot, score)
             await log_channel.send(content=f"⚠️ {ping_roles} **Внимание, обнаружен вход подозрительного аккаунта!** Требуется внимание администрации", embed=log_embed, view=view)
