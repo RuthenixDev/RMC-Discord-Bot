@@ -1,9 +1,194 @@
 import discord
-from typing import Optional
 from discord import app_commands
 from discord.ext import commands
+from discord.ui import Select, View
 from constants import RMC_EMBED_COLOR
 from utils.permissions import check_cog_access
+
+class WikiMainSelect(Select):
+    """Выпадающее меню для выбора статьи с поддержкой пагинации."""
+    def __init__(self, wiki_map: dict, current_page: int, total_pages: int):
+        self.wiki_map = wiki_map
+        self.current_page = current_page
+        self.total_pages = total_pages
+
+        keys = list(wiki_map.keys())
+        start_idx = current_page * 24
+        end_idx = start_idx + 24
+        page_keys = keys[start_idx:end_idx]
+
+        options = []
+        for key in page_keys:
+            art = wiki_map[key]
+            label_text = f"{art['title']} ({key.lower()})"
+            options.append(discord.SelectOption(
+                label=label_text[:100],
+                description=art["desc"][:100],
+                emoji=art.get("emoji", "📖"),
+                value=key
+            ))
+
+        if total_pages > 1:
+            next_page = (current_page + 1) % total_pages
+            options.append(discord.SelectOption(
+                label=f"▶️ Переключить страницу ({next_page + 1}/{total_pages})",
+                description="Показать следующие статьи",
+                emoji="🔄",
+                value="__page_next__"
+            ))
+
+        super().__init__(
+            placeholder=f"Выберите статью (Стр. {current_page + 1}/{total_pages})...",
+            min_values=1,
+            max_values=1,
+            options=options
+        )
+
+    async def callback(self, interaction: discord.Interaction):
+        val = self.values[0]
+        if val == "__page_next__":
+            self.view.current_page = (self.view.current_page + 1) % self.total_pages
+            await self.view.update_message(interaction)
+        else:
+            self.view.selected_article = val
+            self.view.selected_subsection = None
+            await self.view.update_message(interaction)
+
+class WikiSubSelect(Select):
+    """Выпадающее меню подпунктов статьи с кнопкой возврата в главное меню."""
+    def __init__(self, subsections: list):
+        options = []
+        for idx, sub in enumerate(subsections):
+            options.append(discord.SelectOption(
+                label=sub["title"][:100],
+                description=sub.get("desc", "")[:100],
+                emoji="📄",
+                value=f"sub_{idx}"
+            ))
+
+        # Последний пункт для возврата в общее меню
+        options.append(discord.SelectOption(
+            label="🏠 Вернуться в главное меню",
+            description="Вернуться к общему списку статей",
+            emoji="🏠",
+            value="__return_main__"
+        ))
+
+        super().__init__(
+            placeholder="Выберите подпункт статьи...",
+            min_values=1,
+            max_values=1,
+            options=options
+        )
+
+    async def callback(self, interaction: discord.Interaction):
+        val = self.values[0]
+        if val == "__return_main__":
+            self.view.selected_article = None
+            self.view.selected_subsection = None
+            await self.view.update_message(interaction)
+        else:
+            sub_idx = int(val.split("_")[1])
+            self.view.selected_subsection = sub_idx
+            await self.view.update_message(interaction)
+
+class WikiView(View):
+    """View управляющий состоянием интерактивной википедией."""
+    def __init__(self, wiki_map: dict, author: discord.User | discord.Member):
+        super().__init__(timeout=600)
+        self.wiki_map = wiki_map
+        self.author = author
+        self.current_page = 0
+        self.selected_article = None
+        self.selected_subsection = None
+        self.message = None
+        self.update_components()
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user != self.author:
+            await interaction.response.send_message("❌ Вы не можете использовать это меню.", ephemeral=True)
+            return False
+        return True
+
+    def get_total_pages(self) -> int:
+        return (len(self.wiki_map) - 1) // 24 + 1
+
+    def build_main_embed(self) -> discord.Embed:
+        total_articles = len(self.wiki_map)
+        total_pages = self.get_total_pages()
+        embed = discord.Embed(
+            title="📚 Википедия по моддингу Hearts of Iron IV",
+            description=(
+                "Добро пожаловать в справочный центр по моддингу HOI4!\n\n"
+                "Используйте **выпадающее меню ниже**, чтобы выбрать интересующую вас статью и ознакомиться с её содержанием и подпунктами.\n\n"
+                f"**Всего доступно статей:** `{total_articles}` | **Страница:** `{self.current_page + 1}/{total_pages}`"
+            ),
+            color=RMC_EMBED_COLOR,
+            timestamp=discord.utils.utcnow()
+        )
+        embed.set_footer(text="Для выбора статьи или смены страницы используйте меню ниже ⬇️")
+        return embed
+
+    def build_article_embed(self) -> discord.Embed:
+        if not self.selected_article or self.selected_article not in self.wiki_map:
+            return self.build_main_embed()
+
+        art = self.wiki_map[self.selected_article]
+        subsections = art.get("subsections", [])
+
+        desc_parts = [art["desc"]]
+
+        if subsections:
+            desc_parts.append("\n**📌 Доступные подпункты и разделы статьи:**")
+            for idx, sub in enumerate(subsections):
+                is_selected = (self.selected_subsection == idx)
+                prefix = "👉 " if is_selected else "• "
+                desc_parts.append(f"{prefix}[**{sub['title']}**]({sub['url']}) — {sub['desc']}")
+
+        desc_parts.append(f"\n🔗 **[Перейти к полной статье на Wiki]({art['url']})**")
+
+        embed = discord.Embed(
+            title=f"{art.get('emoji', '📖')} {art['title']} ({self.selected_article.lower()})",
+            description="\n".join(desc_parts),
+            color=RMC_EMBED_COLOR,
+            timestamp=discord.utils.utcnow()
+        )
+
+        if self.selected_subsection is not None and 0 <= self.selected_subsection < len(subsections):
+            sub = subsections[self.selected_subsection]
+            embed.add_field(
+                name=f"📄 Выбранный подпункт: {sub['title']}",
+                value=f"{sub['desc']}\n🔗 **[Открыть подпункт]({sub['url']})**",
+                inline=False
+            )
+
+        embed.set_footer(text="Для перехода к другим подпунктам или возврата выберите пункт из меню ниже ⬇️")
+        return embed
+
+    def update_components(self):
+        self.clear_items()
+        if self.selected_article is None:
+            self.add_item(WikiMainSelect(self.wiki_map, self.current_page, self.get_total_pages()))
+        else:
+            art_data = self.wiki_map[self.selected_article]
+            self.add_item(WikiSubSelect(art_data.get("subsections", [])))
+
+    async def update_message(self, interaction: discord.Interaction):
+        self.update_components()
+        if self.selected_article is None:
+            embed = self.build_main_embed()
+        else:
+            embed = self.build_article_embed()
+        await interaction.response.edit_message(embed=embed, view=self)
+
+    async def on_timeout(self):
+        for child in self.children:
+            child.disabled = True
+        if self.message:
+            try:
+                await self.message.edit(view=self)
+            except Exception:
+                pass
 
 class Wiki(commands.Cog):
     required_access = None
@@ -18,117 +203,326 @@ class Wiki(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
         self.wiki_map = {
-            #"help": "Заменено на сообщение справки. Получается, этот вариант отныне невозможно вызвать?",
-            "map": "\n - https://hoi4.paradoxwikis.com/Map_modding \n - https://hoi4.paradoxwikis.com/State_modding \n - https://hoi4.paradoxwikis.com/Supply_areas_modding \n - https://hoi4.paradoxwikis.com/Strategic_region_modding \n - https://hoi4.paradoxwikis.com/Nudger",
-            "country": "https://hoi4.paradoxwikis.com/Country_creation",
-            "data_structures": "https://hoi4.paradoxwikis.com/Data_structures",
-            "effect": "https://hoi4.paradoxwikis.com/Effect",
-            "defines": "https://hoi4.paradoxwikis.com/Defines",
-            "scopes": "https://hoi4.paradoxwikis.com/Scopes",
-            "on_actions": "https://hoi4.paradoxwikis.com/On_actions",
-            "achievement": "https://hoi4.paradoxwikis.com/Achievement_modding",
-            "autonomy": "https://hoi4.paradoxwikis.com/Autonomy_state_modding",
-            "building": "https://hoi4.paradoxwikis.com/Building_modding",
-            "cosmetic_tag": "https://hoi4.paradoxwikis.com/Cosmetic_tag_modding",
-            "division": "https://hoi4.paradoxwikis.com/Division_modding",
-            "equipment": "https://hoi4.paradoxwikis.com/Equipment_modding",
-            "event": "https://hoi4.paradoxwikis.com/Event_modding",
-            "ideology": "https://hoi4.paradoxwikis.com/Ideology_modding",
-            "mio": "https://hoi4.paradoxwikis.com/Military_industrial_organization_modding",
-            "decision": "https://hoi4.paradoxwikis.com/Decision_modding",
-            "resources": "https://hoi4.paradoxwikis.com/Resources_modding",
-            "unit": "https://hoi4.paradoxwikis.com/Unit_modding",
-            "entity": "https://hoi4.paradoxwikis.com/Entity_modding",
-            "font": "https://hoi4.paradoxwikis.com/Font_modding",
-            "music": "https://hoi4.paradoxwikis.com/Music_modding",
-            "sound": "https://hoi4.paradoxwikis.com/Sound_modding",
-            "portrait": "https://hoi4.paradoxwikis.com/Portrait_modding",
-            "namelist": "https://hoi4.paradoxwikis.com/Namelist_modding",
-            "mod_structure": "https://hoi4.paradoxwikis.com/Mod_structure",
-            "console": "https://hoi4.paradoxwikis.com/Console_commands",
-            "troubleshooting": "https://hoi4.paradoxwikis.com/Troubleshooting",
-            "scripted_gui": "https://hoi4.paradoxwikis.com/Scripted_GUI_modding",
-            "interface": "https://hoi4.paradoxwikis.com/Interface_modding",
-            "modifiers": "\n - https://hoi4.paradoxwikis.com/Modifiers \n - https://hoi4.paradoxwikis.com/List_of_modifiers",
-            "idea": "https://hoi4.paradoxwikis.com/Idea_modding",
-            "technology": "https://hoi4.paradoxwikis.com/Technology_modding",
-            "bop": "https://hoi4.paradoxwikis.com/Balance_of_power_modding",
-            "bookmark": "https://hoi4.paradoxwikis.com/Bookmark_modding",
-            "gfx": "\n - https://hoi4.paradoxwikis.com/Graphical_asset_modding \n - https://hoi4.paradoxwikis.com/Posteffect_modding \n - https://hoi4.paradoxwikis.com/Particle_modding",
-            "ai": "\n - https://hoi4.paradoxwikis.com/AI_modding \n - https://hoi4.paradoxwikis.com/AI_focuses",
-            "character": "https://hoi4.paradoxwikis.com/Character_modding",
-            "localisation": "https://hoi4.paradoxwikis.com/Localisation",
-            "national_focuses": "https://hoi4.paradoxwikis.com/National_focus_modding",
-            "triggers": "https://hoi4.paradoxwikis.com/Triggers",
+            "map": {
+                "title": "Создание и редактирование карты",
+                "emoji": "🗺️",
+                "url": "https://hoi4.paradoxwikis.com/Map_modding",
+                "desc": "Основное руководство по созданию и редактированию карты, штатов и провинций.",
+                "subsections": [
+                    {"title": "State modding", "url": "https://hoi4.paradoxwikis.com/State_modding", "desc": "Моддинг штатов, регионов и населения."},
+                    {"title": "Supply areas", "url": "https://hoi4.paradoxwikis.com/Supply_areas_modding", "desc": "Моддинг зон снабжения и инфраструктуры."}
+                ]
+            },
+            "country": {
+                "title": "Создание стран",
+                "emoji": "🚩",
+                "url": "https://hoi4.paradoxwikis.com/Country_creation",
+                "desc": "Создание новых государств, тегов, правителей и истории.",
+                "subsections": [
+                    {"title": "Cosmetic tags", "url": "https://hoi4.paradoxwikis.com/Cosmetic_tag_modding", "desc": "Динамические косметические теги стран."},
+                    {"title": "History & OOB", "url": "https://hoi4.paradoxwikis.com/Country_creation#History", "desc": "История страны и расстановка стартовых войск."}
+                ]
+            },
+            "data_structures": {
+                "title": "Структуры данных",
+                "emoji": "📊",
+                "url": "https://hoi4.paradoxwikis.com/Data_structures",
+                "desc": "Массивы, переменные, глобальные флаги и структуры данных в Paradox Script.",
+                "subsections": []
+            },
+            "effect": {
+                "title": "Эффекты (Effects)",
+                "emoji": "⚡",
+                "url": "https://hoi4.paradoxwikis.com/Effect",
+                "desc": "Справочник эффектов, изменяющих состояние игры, стран и юнитов.",
+                "subsections": []
+            },
+            "defines": {
+                "title": "Игровые константы (Defines)",
+                "emoji": "⚙️",
+                "url": "https://hoi4.paradoxwikis.com/Defines",
+                "desc": "Параметры и числовые константы игрового движка в NDefines.",
+                "subsections": []
+            },
+            "scopes": {
+                "title": "Области видимости (Scopes)",
+                "emoji": "🎯",
+                "url": "https://hoi4.paradoxwikis.com/Scopes",
+                "desc": "Контексты исполнения скриптов (ROOT, FROM, PREV, THIS, EVERY_COUNTRY и др.).",
+                "subsections": []
+            },
+            "on_actions": {
+                "title": "Триггеры действий (On Actions)",
+                "emoji": "🔔",
+                "url": "https://hoi4.paradoxwikis.com/On_actions",
+                "desc": "События и скрипты, вызываемые игрой при выполнении конкретных действий.",
+                "subsections": []
+            },
+            "achievement": {
+                "title": "Моддинг достижений",
+                "emoji": "🏆",
+                "url": "https://hoi4.paradoxwikis.com/Achievement_modding",
+                "desc": "Создание пользовательских достижений и условий их получения.",
+                "subsections": []
+            },
+            "autonomy": {
+                "title": "Уровни автономии",
+                "emoji": "📜",
+                "url": "https://hoi4.paradoxwikis.com/Autonomy_state_modding",
+                "desc": "Настройка уровней зависимых государств и видов марионеток.",
+                "subsections": []
+            },
+            "building": {
+                "title": "Постройки и здания",
+                "emoji": "🏗️",
+                "url": "https://hoi4.paradoxwikis.com/Building_modding",
+                "desc": "Создание новых видов зданий, фабрик, укреплений и инфраструктуры.",
+                "subsections": []
+            },
+            "cosmetic_tag": {
+                "title": "Косметические теги",
+                "emoji": "🏷️",
+                "url": "https://hoi4.paradoxwikis.com/Cosmetic_tag_modding",
+                "desc": "Настройка альтернативных названий, флагов и цветов для государств.",
+                "subsections": []
+            },
+            "division": {
+                "title": "Моддинг дивизий",
+                "emoji": "🎖️",
+                "url": "https://hoi4.paradoxwikis.com/Division_modding",
+                "desc": "Настройка шаблонов дивизий, состава и стартовых сухопутных сил.",
+                "subsections": []
+            },
+            "equipment": {
+                "title": "Снаряжение и техника",
+                "emoji": "⚔️",
+                "url": "https://hoi4.paradoxwikis.com/Equipment_modding",
+                "desc": "Создание типов вооружения, танков, самолетов и кораблей.",
+                "subsections": []
+            },
+            "event": {
+                "title": "События (Ивенты)",
+                "emoji": "📰",
+                "url": "https://hoi4.paradoxwikis.com/Event_modding",
+                "desc": "Создание событий для стран, новостных ивентов и диалоговых окон.",
+                "subsections": [
+                    {"title": "Country events", "url": "https://hoi4.paradoxwikis.com/Event_modding#Country_event", "desc": "Обычные события для конкретной страны."},
+                    {"title": "News events", "url": "https://hoi4.paradoxwikis.com/Event_modding#News_event", "desc": "Глобальные новостные сообщения."}
+                ]
+            },
+            "ideology": {
+                "title": "Моддинг идеологий",
+                "emoji": "⚖️",
+                "url": "https://hoi4.paradoxwikis.com/Ideology_modding",
+                "desc": "Создание политических идеологий, суб-идеологий и правил фракций.",
+                "subsections": []
+            },
+            "mio": {
+                "title": "Военно-промышленные организации (МИО)",
+                "emoji": "🏭",
+                "url": "https://hoi4.paradoxwikis.com/Military_industrial_organization_modding",
+                "desc": "Настройка концернов, производительского оборудования и древа МИО.",
+                "subsections": []
+            },
+            "decision": {
+                "title": "Решения и категории",
+                "emoji": "☑️",
+                "url": "https://hoi4.paradoxwikis.com/Decision_modding",
+                "desc": "Создание вкладки решений, категорий, таймеров и миссий.",
+                "subsections": []
+            },
+            "resources": {
+                "title": "Стратегические ресурсы",
+                "emoji": "💎",
+                "url": "https://hoi4.paradoxwikis.com/Resources_modding",
+                "desc": "Добавление и настройка мировых ресурсов (нефть, сталь и др.).",
+                "subsections": []
+            },
+            "unit": {
+                "title": "Моддинг юнитов",
+                "emoji": "🪖",
+                "url": "https://hoi4.paradoxwikis.com/Unit_modding",
+                "desc": "Добавление батальонов, типов войск и их характеристик.",
+                "subsections": []
+            },
+            "entity": {
+                "title": "3D Модели и Entity",
+                "emoji": "🎮",
+                "url": "https://hoi4.paradoxwikis.com/Entity_modding",
+                "desc": "Привязка 3D-моделей солдат, техники и анимаций на карте.",
+                "subsections": []
+            },
+            "font": {
+                "title": "Шрифты интерфейса",
+                "emoji": "🔤",
+                "url": "https://hoi4.paradoxwikis.com/Font_modding",
+                "desc": "Добавление и конвертация новых шрифтов для GUI.",
+                "subsections": []
+            },
+            "music": {
+                "title": "Музыка и радиостанция",
+                "emoji": "🎵",
+                "url": "https://hoi4.paradoxwikis.com/Music_modding",
+                "desc": "Добавление музыкальных треков и кастомных радиостанций.",
+                "subsections": []
+            },
+            "sound": {
+                "title": "Звуковые эффекты",
+                "emoji": "🔊",
+                "url": "https://hoi4.paradoxwikis.com/Sound_modding",
+                "desc": "Подключение звуков интерфейса, стрельбы и окружения.",
+                "subsections": []
+            },
+            "portrait": {
+                "title": "Портреты персонажей",
+                "emoji": "🖼️",
+                "url": "https://hoi4.paradoxwikis.com/Portrait_modding",
+                "desc": "Настройка и привязка портретов лидеров и военачальников.",
+                "subsections": []
+            },
+            "namelist": {
+                "title": "Списки имён",
+                "emoji": "📜",
+                "url": "https://hoi4.paradoxwikis.com/Namelist_modding",
+                "desc": "Генерация имён дивизий, кораблей, самолетов и персонажей.",
+                "subsections": []
+            },
+            "mod_structure": {
+                "title": "Структура мода",
+                "emoji": "📁",
+                "url": "https://hoi4.paradoxwikis.com/Mod_structure",
+                "desc": "Иерархия папок мода, файл .mod и дескриптор.",
+                "subsections": []
+            },
+            "console": {
+                "title": "Консольные команды",
+                "emoji": "💻",
+                "url": "https://hoi4.paradoxwikis.com/Console_commands",
+                "desc": "Список чит-кодов и консольных команд для тестов.",
+                "subsections": []
+            },
+            "troubleshooting": {
+                "title": "Отладка и ошибки",
+                "emoji": "🛠️",
+                "url": "https://hoi4.paradoxwikis.com/Troubleshooting",
+                "desc": "Поиск багов, анализ error.log и отладка вылетов.",
+                "subsections": []
+            },
+            "scripted_gui": {
+                "title": "Скриптовый GUI",
+                "emoji": "🖥️",
+                "url": "https://hoi4.paradoxwikis.com/Scripted_GUI_modding",
+                "desc": "Интерактивные интерфейсы, кнопки и окна на скриптах.",
+                "subsections": []
+            },
+            "interface": {
+                "title": "Моддинг интерфейса",
+                "emoji": "🎨",
+                "url": "https://hoi4.paradoxwikis.com/Interface_modding",
+                "desc": "Редактирование .gui файлов, окон, макетов и кнопок.",
+                "subsections": []
+            },
+            "modifiers": {
+                "title": "Модификаторы",
+                "emoji": "📈",
+                "url": "https://hoi4.paradoxwikis.com/Modifiers",
+                "desc": "Полный список баффов и дебаффов для страны и юнитов.",
+                "subsections": [
+                    {"title": "List of modifiers", "url": "https://hoi4.paradoxwikis.com/List_of_modifiers", "desc": "Полный перечень всех модификаторов игры."}
+                ]
+            },
+            "idea": {
+                "title": "Национальные духи и советники",
+                "emoji": "💡",
+                "url": "https://hoi4.paradoxwikis.com/Idea_modding",
+                "desc": "Создание идей, законов, министров и советников.",
+                "subsections": []
+            },
+            "technology": {
+                "title": "Технологии и исследования",
+                "emoji": "🔬",
+                "url": "https://hoi4.paradoxwikis.com/Technology_modding",
+                "desc": "Моддинг технологического древа, исследований и бонусов.",
+                "subsections": []
+            },
+            "bop": {
+                "title": "Баланс сил (Balance of Power)",
+                "emoji": "⚖️",
+                "url": "https://hoi4.paradoxwikis.com/Balance_of_power_modding",
+                "desc": "Механика противоборствующих сторон и шкалы силы.",
+                "subsections": []
+            },
+            "bookmark": {
+                "title": "Стартовые закладки",
+                "emoji": "📅",
+                "url": "https://hoi4.paradoxwikis.com/Bookmark_modding",
+                "desc": "Создание дат начала игры (1936, 1939 и т.д.).",
+                "subsections": []
+            },
+            "gfx": {
+                "title": "Графические ассеты (GFX)",
+                "emoji": "🖼️",
+                "url": "https://hoi4.paradoxwikis.com/Graphical_asset_modding",
+                "desc": "Настройка текстур, .dds файлов, иконок и ассетов.",
+                "subsections": [
+                    {"title": "Posteffect modding", "url": "https://hoi4.paradoxwikis.com/Posteffect_modding", "desc": "Моддинг пост-эффектов шейдеров."},
+                    {"title": "Particle modding", "url": "https://hoi4.paradoxwikis.com/Particle_modding", "desc": "Моддинг частиц и спецэффектов."}
+                ]
+            },
+            "ai": {
+                "title": "Моддинг ИИ (AI)",
+                "emoji": "🤖",
+                "url": "https://hoi4.paradoxwikis.com/AI_modding",
+                "desc": "Настройка поведения бота, шаблонов строительства и фокусов.",
+                "subsections": [
+                    {"title": "AI focuses", "url": "https://hoi4.paradoxwikis.com/AI_focuses", "desc": "Настройка приоритетов фокусов для ИИ."}
+                ]
+            },
+            "character": {
+                "title": "Персонажи (Characters)",
+                "emoji": "👤",
+                "url": "https://hoi4.paradoxwikis.com/Character_modding",
+                "desc": "Единая система генералов, лидеров стран и советников.",
+                "subsections": []
+            },
+            "localisation": {
+                "title": "Локализация",
+                "emoji": "🌐",
+                "url": "https://hoi4.paradoxwikis.com/Localisation",
+                "desc": "Языковые файлы YAML, раскраска текста и переменные.",
+                "subsections": [
+                    {"title": "Colouring characters", "url": "https://hoi4.paradoxwikis.com/Localisation#Colouring_characters", "desc": "Задание цвета тексту в файлах локализации."},
+                    {"title": "Formatting variables", "url": "https://hoi4.paradoxwikis.com/Localisation#Formatting_variables", "desc": "Вывод переменных и значений в текст."},
+                    {"title": "Scripted localisation", "url": "https://hoi4.paradoxwikis.com/Localisation#Scripted_localisation", "desc": "Динамический текст по скриптовым условиям."}
+                ]
+            },
+            "national_focuses": {
+                "title": "Национальные фокусы",
+                "emoji": "🎯",
+                "url": "https://hoi4.paradoxwikis.com/National_focus_modding",
+                "desc": "Создание древа фокусов, веток, связей и иконок.",
+                "subsections": []
+            },
+            "triggers": {
+                "title": "Триггеры и условия",
+                "emoji": "🔍",
+                "url": "https://hoi4.paradoxwikis.com/Triggers",
+                "desc": "Справочник логических условий и проверок в скриптах.",
+                "subsections": []
+            }
         }
+
     @commands.hybrid_command(
         name="wiki",
         with_app_command=True,
-        description="Посмотреть страницу вики по моддингу."
+        description="Посмотреть интерактивную справку и статьи по моддингу HOI4."
     )
-    @app_commands.describe(wiki_id="Выберите статью вики")
-    
-    async def wiki(self, ctx: commands.Context, wiki_id: Optional[str] = None):
-        """Показать статью вики по идентификатору."""
-        
-        articles_list = []
-
-        for article_name in self.wiki_map.keys():
-            articles_list.append(f"- `{article_name}`")
-
-        if wiki_id is None or wiki_id == "help":
-            available_articles = ", ".join([f"`{key}`" for key in self.wiki_map.keys()])
-            embed = discord.Embed(
-                title="📚 Доступные статьи вики",
-                description=f"Всего статей: {len(self.wiki_map)}\n\n{available_articles}",
-                color=RMC_EMBED_COLOR,
-                timestamp=discord.utils.utcnow()
-            )
-            embed.set_footer(text="Для повторной справки используйте !rmc wiki help")
-            await ctx.send(embed=embed)
-            return
-            
-        answer = self.wiki_map.get(wiki_id)
-        if answer:
-            embed = discord.Embed(
-                title=f"📖Статья `{wiki_id}`",
-                description=f"🔗{answer}",
-                color=RMC_EMBED_COLOR,
-                timestamp=discord.utils.utcnow()
-            )
-            embed.set_footer(text="Список доступных статей можно посмотреть по !rmc wiki help")
-            await ctx.send(embed=embed)
-        else:
-            embed = discord.Embed(
-                title="❌ Ошибка",
-                description="Такой статьи нет в базе!",
-                color=RMC_EMBED_COLOR,
-                timestamp=discord.utils.utcnow(),
-            )
-            embed.set_footer(text="Список доступных статей можно посмотреть по !rmc wiki help")
-            await ctx.send(embed=embed)
-
-    @wiki.autocomplete('wiki_id')
-    async def wiki_autocomplete(self, interaction: discord.Interaction, current: str):
-        """Автодополнение для поиска статей"""
-        choices = []
-        
-        if not current or "help".startswith(current.lower()):
-            choices.append(app_commands.Choice(name="📚 Полный список статей", value="help"))
-        
-        for key in self.wiki_map.keys():
-            display_name = key.replace('_', ' ').title()
-            
-            if (not current or  
-                current.lower() in key.lower() or 
-                current.lower() in display_name.lower()):
-                
-                if len(choices) < 24:  
-                    choices.append(app_commands.Choice(name=display_name, value=key))
-                else:
-                    break
-        
-        return choices
+    async def wiki(self, ctx: commands.Context):
+        """Показать справочник статей вики по моддингу HOI4."""
+        view = WikiView(self.wiki_map, ctx.author)
+        embed = view.build_main_embed()
+        msg = await ctx.send(embed=embed, view=view)
+        view.message = msg
 
 async def setup(bot: commands.Bot):
     await bot.add_cog(Wiki(bot))

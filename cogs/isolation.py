@@ -12,6 +12,88 @@ from constants import RMC_EMBED_COLOR
 
 isolated_users = "isolated_users.json"
 
+<<<<<<< Updated upstream
+=======
+class IsolationPaginatedView(discord.ui.View):
+    def __init__(self, data: List, author: discord.Member, create_embed_func):
+        super().__init__(timeout=600)
+        self.data = data
+        self.author = author
+        self.create_embed = create_embed_func
+        self.current_page = 0
+        self.per_page = 10
+        self.message: discord.WebhookMessage = None  # Ссылка на отправленное сообщение
+
+        self.update_buttons()
+
+    def update_buttons(self):
+        total_pages = max(1, (len(self.data) - 1) // self.per_page + 1)
+        self.previous_button.disabled = (self.current_page == 0)
+        self.next_button.disabled = (self.current_page >= total_pages - 1)
+
+    async def on_timeout(self):
+        # Отключаем кнопки в памяти
+        for item in self.children:
+            if isinstance(item, discord.ui.Button):
+                item.disabled = True
+        
+        # Обновляем сообщение в Discord, если ссылка на него была сохранена
+        if self.message:
+            try:
+                await self.message.edit(view=self)
+            except discord.HTTPException:
+                pass  # Сообщение могло быть удалено модератором
+
+    async def get_page_embed(self) -> discord.Embed:
+        total_items = len(self.data)
+        total_pages = max(1, (total_items - 1) // self.per_page + 1)
+
+        start = self.current_page * self.per_page
+        end = start + self.per_page
+        page_items = self.data[start:end]
+
+        embed = self.create_embed("📋 Список изолированных участников", f"Всего в изоляторе: **{total_items}**")
+        embed.set_footer(text=f"Страница {self.current_page + 1}/{total_pages}")
+
+        for item in page_items:
+            embed.add_field(name=item['name'], value=item['value'], inline=False)
+        return embed
+
+    @discord.ui.button(label="◀️ Назад", style=discord.ButtonStyle.secondary)
+    async def previous_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user != self.author:
+            return await interaction.response.send_message("❌ Эта кнопка не для тебя!", ephemeral=True)
+
+        if self.current_page > 0:
+            self.current_page -= 1
+            self.update_buttons()
+            await interaction.response.edit_message(embed=await self.get_page_embed(), view=self)
+
+    @discord.ui.button(label="▶️ Вперед", style=discord.ButtonStyle.secondary)
+    async def next_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user != self.author:
+            return await interaction.response.send_message("❌ Эта кнопка не для тебя!", ephemeral=True)
+
+        if (self.current_page + 1) * self.per_page < len(self.data):
+            self.current_page += 1
+            self.update_buttons()
+            await interaction.response.edit_message(embed=await self.get_page_embed(), view=self)
+
+    
+
+
+@dataclass
+class IsolatedUser:
+    roles: List[int]
+    isolated_at: Optional[float] = None
+    isolated_by: Optional[int] = None
+    reason: str = "Не указана" 
+
+    @property
+    def formatted_time(self) -> str:
+        return f"<t:{int(self.isolated_at)}:d>" if self.isolated_at else "Неизвестно"
+
+>>>>>>> Stashed changes
 class Isolation(commands.Cog):
     """Cog изоляции участников"""
     required_access = "admin"
@@ -125,12 +207,34 @@ class Isolation(commands.Cog):
     )
     @app_commands.guild_only()
     @app_commands.describe(
+<<<<<<< Updated upstream
         isolation_member = "Участник для изоляции",
     )
     async def isolate(self, interaction: discord.Interaction, isolation_member: discord.Member, isolation_reason: Optional[str]):
         if not await self.check_admin(interaction):
             await interaction.response.send_message("❌ Недостаточно прав", ephemeral=True)
             return
+=======
+        isolation_member="Участник для изоляции",
+        suspicious_account="Изолировать как подозрительный аккаунт? (автопричина + уведомление в изолятор)",
+        isolation_reason="Причина изоляции"
+    )
+    @app_commands.choices(
+        suspicious_account=[
+            app_commands.Choice(name="Да", value=1),
+            app_commands.Choice(name="Нет", value=0)
+        ]
+    )
+    async def isolate(self, interaction: discord.Interaction, isolation_member: discord.User, suspicious_account: Optional[int] = 0, isolation_reason: Optional[str] = "Не указана"):
+        await check_admin_interaction(interaction)
+
+        if isolation_member.id == interaction.user.id:
+            embed = self._create_embed("❌Ошибка при изоляции", "Вы не можете изолировать себя!")
+            await interaction.response.send_message(embed=embed, ephemeral=True)
+            return
+        
+        is_suspicious_account = bool(suspicious_account)
+>>>>>>> Stashed changes
 
         try:
             settings_data = settings.load_settings()
@@ -214,6 +318,7 @@ class Isolation(commands.Cog):
                     with open(isolated_users, 'w', encoding='utf-8') as f:
                         json.dump(isolated_data, f, indent=4, ensure_ascii=False)
 
+<<<<<<< Updated upstream
                 #лишаем ролей
                 await interaction.response.defer(ephemeral=True)
                 if isolation_member_roles:
@@ -226,6 +331,70 @@ class Isolation(commands.Cog):
                     description=f"Участник {isolation_member.mention} изолирован!",
                     color=RMC_EMBED_COLOR,
                     timestamp=discord.utils.utcnow()
+=======
+                settings_data = settings.load_settings()
+                role_id = settings_data.get('isolation_role_id')
+                channel_id = settings_data.get('log_channel')
+                isolator_channel_id = settings_data.get('isolator_channel_id')
+
+                isolation_role = interaction.guild.get_role(role_id) if role_id else None
+                log_channel = interaction.guild.get_channel(channel_id) if channel_id else None 
+                isolator_channel = interaction.guild.get_channel(isolator_channel_id) if isolator_channel_id else None
+
+                if not log_channel:
+                    raise NoLogChannelError()
+
+                if not isolation_role:
+                    embed = self._create_embed("❌Ошибка", "Не назначена роль изоляции!")
+                    embed.set_footer(text="Для настройки используйте /isolate_settings.")
+                    await interaction.followup.send(embed=embed, ephemeral=True)
+                    return
+
+                role_ids = []
+                
+                if member:
+                    if member.top_role >= interaction.guild.me.top_role or member == interaction.guild.owner:
+                        embed = self._create_embed("❌ Ошибка при изоляции", "У участника есть роль, которая не может быть снята ботом из-за недостатка прав доступа.")
+                        await interaction.followup.send(embed=embed, ephemeral=True)
+                        return
+
+                    admin_roles = settings_data.get('admin_roles', [])
+                    isolation_member_roles = []
+                    
+                    for role in member.roles:
+                        if not role.is_default() and not role.managed and role != isolation_role:
+                            if role.id in admin_roles:
+                                embed = self._create_embed(
+                                    "❌Ошибка при изоляции", 
+                                    "У выбранного участника есть роль, которая отмечена как административная."
+                                )
+                                await interaction.followup.send(embed=embed, ephemeral=True)
+                                return
+                            isolation_member_roles.append(role)
+
+                    role_ids = [role.id for role in isolation_member_roles]
+
+                    # Формируем итоговый список ролей без управляемых (системных) ролей и @everyone
+                    new_roles = [
+                        r for r in member.roles 
+                        if r not in isolation_member_roles and r != isolation_role and not r.is_default() and not r.managed
+                    ]
+                    new_roles.append(isolation_role)
+                    
+                    await member.edit(roles=new_roles, reason=f"Изолирован {interaction.user}: {isolation_reason}")
+
+                if is_suspicious_account:
+                    isolation_reason = "Подозрительный аккаунт."
+                    if isolator_channel:
+                        await isolator_channel.send(f"{isolation_member.mention} \nДоброго времени суток, это дополнительная проверка, чтобы убедиться, что вы не бот. Ответьте на это сообщение любым образом, чтобы мы могли идентифицировать в вас человека.\n\nHello, this is an additional verification step to ensure you are not a bot. Please reply to this message in any way so we can confirm that you are a human.")
+
+
+                isolated_data[user_id] = IsolatedUser(
+                    roles=role_ids,
+                    isolated_at=time.time(),
+                    isolated_by=interaction.user.id,
+                    reason=isolation_reason if isolation_reason else "Не указана"
+>>>>>>> Stashed changes
                 )
                 if isolation_reason:
                     response_embed.add_field(
@@ -373,8 +542,26 @@ class Isolation(commands.Cog):
                     if role:
                         roles_to_restore.append(role)
 
+<<<<<<< Updated upstream
 
                 await member.remove_roles(role_object, reason=f"Модератор {interaction.user} снял изоляцию по причине {unisolation_reason}")
+=======
+                if member:
+                    # Очищаем от системных и удаляем роль изоляции
+                    new_roles = [r for r in member.roles if r.id != role_object.id and not r.is_default() and not r.managed]
+                    
+                    # Восстанавливаем ранее сохраненные роли
+                    stored_roles = getattr(user_data, 'roles', [])
+                    for r_id in stored_roles:
+                        role = interaction.guild.get_role(r_id)
+                        if role and role not in new_roles:
+                            new_roles.append(role)
+
+                    try:
+                        await member.edit(roles=new_roles, reason=f"Снятие/восстановление после изоляции: {unisolation_reason}")
+                    except discord.Forbidden:
+                        pass
+>>>>>>> Stashed changes
 
                 if roles_to_restore:
                     await member.add_roles(*roles_to_restore, reason=f"Модератор {interaction.user} снял изоляцию по причине {unisolation_reason}")

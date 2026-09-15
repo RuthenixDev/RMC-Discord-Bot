@@ -1,4 +1,5 @@
 import discord
+import re
 from discord.ext import commands
 from discord import app_commands
 from utils.permissions import check_cog_access
@@ -8,14 +9,264 @@ import sys
 import os
 from constants import RMC_EMBED_COLOR
 
+<<<<<<< Updated upstream
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+=======
+#TODO: сделать логику сохранения кнопок ответа на репорт чтобы они не умирали при перезагрузке
+# что-то сделать с архивацией ветки (получить ID через self.report_message.id)
+
+class ConfirmView(discord.ui.View):
+    def __init__(self, label: str):
+        super().__init__(timeout=30)
+        self.value = None
+
+    @discord.ui.button(label="Да", style=discord.ButtonStyle.danger)
+    async def confirm(self, interaction: discord.Interaction, button: discord.ui.Button):
+        self.value = True
+        self.stop()
+
+    @discord.ui.button(label="Нет", style=discord.ButtonStyle.secondary)
+    async def cancel(self, interaction: discord.Interaction, button: discord.ui.Button):
+        self.value = False
+        self.stop()
+
+class ReportCommentModal(discord.ui.Modal, title="Комментарий к ответу"):
+    def __init__(self, report_message: discord.Message, response_type: str):
+        super().__init__()
+        self.report_message = report_message
+        self.response_type = response_type
+
+        self.comment = discord.ui.TextInput(
+            label=f"Комментарий ({response_type})",
+            placeholder="Опишите решение или причину...",
+            style=discord.TextStyle.paragraph,
+            required=True,
+            max_length=1000
+        )
+        self.add_item(self.comment)
+
+    async def on_submit(self, interaction: discord.Interaction):
+        comment = self.comment.value
+
+        embed = self.report_message.embeds[0]
+        
+        for i, field in enumerate(embed.fields):
+            if field.name == "📊 Статус":
+                embed.set_field_at(i, name="📊 Статус", value=self.response_type, inline=True)
+                break
+        
+        embed.color = discord.Color.green() if "✅" in self.response_type else discord.Color.orange()
+        embed.add_field(name="👮 Ответственный", value=interaction.user.mention, inline=True)
+        embed.add_field(name="💬 Комментарий", value=comment, inline=False)
+
+        thread = interaction.guild.get_thread(self.report_message.id)
+        if thread:
+            try:
+                await thread.edit(archived=True, locked=True, reason=f"Репорт закрыт: {self.response_type}")
+            except discord.HTTPException:
+                pass
+
+        await self.report_message.edit(embed=embed, view=None)
+        await interaction.response.send_message("✅ Ответ добавлен к репорту.", ephemeral=True)
+
+class AnswerTypeView(discord.ui.View):
+    def __init__(self, report_message: discord.Message):
+        super().__init__(timeout=120)
+        self.report_message = report_message
+
+    @discord.ui.button(label="Выполнено", style=discord.ButtonStyle.success, emoji="✅")
+    async def done_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.send_modal(ReportCommentModal(self.report_message, "✅ Выполнено"))
+
+    @discord.ui.button(label="Проигнорировано", style=discord.ButtonStyle.secondary, emoji="⏭️")
+    async def ignore_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.send_modal(ReportCommentModal(self.report_message, "⏭️ Проигнорировано"))
+
+    @discord.ui.button(label="Отменить", style=discord.ButtonStyle.danger, emoji="❌")
+    async def cancel_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.edit_message(content="❌ Действие отменено.", view=None)
+
+class ReportAnswerView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=None)
+
+    @classmethod
+    def build(cls, in_blacklist: bool, has_thread: bool):
+        view = cls()
+        if in_blacklist:
+            view.remove_item(view.add_blacklist_btn)
+        else:
+            view.remove_item(view.remove_blacklist_btn)
+            
+        if not has_thread:
+            view.remove_item(view.go_to_thread_btn)
+            
+        return view
+
+    def _get_reporter_id(self, message: discord.Message):
+        try:
+            val = message.embeds[0].fields[0].value
+            match = re.search(r'`(\d+)`', val)
+            return int(match.group(1)) if match else None
+        except Exception:
+            return None
+
+    def _check_admin(self, interaction: discord.Interaction):
+        data = settings.load_settings()
+        admin_roles_ids = set(data.get("admin_roles", []))
+        return any(r.id in admin_roles_ids for r in interaction.user.roles)
+
+    @discord.ui.button(label="🚫 Добавить в ЧС", style=discord.ButtonStyle.danger, emoji="🚫", custom_id="report_add_blacklist")
+    async def add_blacklist_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not self._check_admin(interaction):
+            return await interaction.response.send_message("❌ У вас нет прав для выполнения этого действия.", ephemeral=True)
+
+        reporter_id = self._get_reporter_id(interaction.message)
+        if not reporter_id:
+            return await interaction.response.send_message("❌ Ошибка: Не удалось определить ID отправителя.", ephemeral=True)
+
+        confirm_view = ConfirmView("Добавить в ЧС репортов?")
+        await interaction.response.send_message(
+            f"Вы уверены, что хотите добавить <@{reporter_id}> в чёрный список репортов?",
+            view=confirm_view,
+            ephemeral=True
+        )
+        
+        await confirm_view.wait()
+        if confirm_view.value:
+            data = settings.load_settings()
+            blacklist = set(data.get("report_blacklist", []))
+
+            if reporter_id in blacklist:
+                return await interaction.edit_original_response(content="❌ Пользователь уже в ЧС.", view=None)
+
+            blacklist.add(reporter_id)
+            data["report_blacklist"] = list(blacklist)
+            settings.save_settings(data)
+
+            await interaction.edit_original_response(
+                content=f"✅ <@{reporter_id}> добавлен в чёрный список репортов.",
+                view=None
+            )
+            
+            embed = interaction.message.embeds[0]
+            embed.set_field_at(0, 
+                name="👤 Отправитель жалобы", 
+                value=f"<@{reporter_id}> (`{reporter_id}`) 🚫", 
+                inline=True
+            )
+            has_thread = interaction.guild.get_thread(interaction.message.id) is not None
+            new_view = ReportAnswerView.build(in_blacklist=True, has_thread=has_thread)
+            await interaction.message.edit(embed=embed, view=new_view)
+
+    @discord.ui.button(label="✅ Удалить из ЧС", style=discord.ButtonStyle.success, emoji="✅", custom_id="report_remove_blacklist")
+    async def remove_blacklist_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not self._check_admin(interaction):
+            return await interaction.response.send_message("❌ У вас нет прав для выполнения этого действия.", ephemeral=True)
+
+        reporter_id = self._get_reporter_id(interaction.message)
+        if not reporter_id:
+            return await interaction.response.send_message("❌ Ошибка: Не удалось определить ID отправителя.", ephemeral=True)
+
+        confirm_view = ConfirmView("Удалить из ЧС репортов?")
+        await interaction.response.send_message(
+            f"Вы уверены, что хотите удалить <@{reporter_id}> из чёрного списка репортов?",
+            view=confirm_view,
+            ephemeral=True
+        )
+        
+        await confirm_view.wait()
+        if confirm_view.value:
+            data = settings.load_settings()
+            blacklist = set(data.get("report_blacklist", []))
+
+            if reporter_id not in blacklist:
+                return await interaction.edit_original_response(content="❌ Пользователь не в ЧС.", view=None)
+
+            blacklist.remove(reporter_id)
+            data["report_blacklist"] = list(blacklist)
+            settings.save_settings(data)
+
+            await interaction.edit_original_response(
+                content=f"♻️ <@{reporter_id}> удалён из чёрного списка репортов.",
+                view=None
+            )
+            
+            embed = interaction.message.embeds[0]
+            embed.set_field_at(0, 
+                name="👤 Отправитель жалобы", 
+                value=f"<@{reporter_id}> (`{reporter_id}`)", 
+                inline=True
+            )
+            has_thread = interaction.guild.get_thread(interaction.message.id) is not None
+            new_view = ReportAnswerView.build(in_blacklist=False, has_thread=has_thread)
+            await interaction.message.edit(embed=embed, view=new_view)
+
+    @discord.ui.button(label="💬 Добавить ответ на репорт", style=discord.ButtonStyle.primary, emoji="💬", custom_id="report_give_answer")
+    async def give_answer_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not self._check_admin(interaction):
+            return await interaction.response.send_message("❌ У вас нет прав для ответа на репорты.", ephemeral=True)
+
+        view = AnswerTypeView(interaction.message)
+        await interaction.response.send_message(
+            "📋 **Выберите тип ответа:**\n\n"
+            "✅ **Выполнено** - жалоба рассмотрена и приняты меры\n"
+            "⏭️ **Проигнорировано** - жалоба не требует действий\n"
+            "❌ **Отменить** - вернуться назад",
+            view=view,
+            ephemeral=True
+        )
+
+    @discord.ui.button(label="💬 Обсуждение", style=discord.ButtonStyle.blurple, emoji="💬", custom_id="report_go_to_thread")
+    async def go_to_thread_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+        thread = interaction.guild.get_thread(interaction.message.id)
+        if thread:
+            await interaction.response.send_message(
+                f"📎 Перейти к обсуждению: {thread.mention}",
+                ephemeral=True
+            )
+        else:
+            await interaction.response.send_message(
+                "❌ Ветка обсуждения не найдена.",
+                ephemeral=True
+            )
+
+# ====== Модальное окно для указания причины ======
+class ReportReasonModal(discord.ui.Modal, title="Отправка жалобы"):
+    def __init__(self, cog: commands.Cog, target_message: discord.Message):
+        super().__init__()
+        self.cog = cog
+        self.target_message = target_message
+
+        self.reason = discord.ui.TextInput(
+            label="Причина жалобы",
+            style=discord.TextStyle.paragraph,
+            placeholder="Опишите причину жалобы...",
+            required=False,
+            max_length=500
+        )
+        self.add_item(self.reason)
+
+    async def on_submit(self, interaction: discord.Interaction):
+        success = await self.cog.send_report(
+            interaction.guild, interaction.user, self.target_message, str(self.reason)
+        )
+        if success:
+            await interaction.response.send_message("✅ Репорт отправлен администрации.", ephemeral=True)
+        else:
+            await interaction.response.send_message("❌ Репорт не отправлен, т.к. на сервере не настроен канал для репортов. Обратитесь к Администрации.", ephemeral=True)
+>>>>>>> Stashed changes
 
 class Reports(commands.Cog):
     required_access = "admin"
 
     def __init__(self, bot: commands.Bot):
         self.bot = bot
+
+    async def cog_load(self):
+        # Регистрируем View глобально, чтобы кнопки реагировали после рестарта бота
+        self.bot.add_view(ReportAnswerView())
 
     async def cog_check(self, ctx: commands.Context):
         allowed = await check_cog_access(ctx, self.required_access)
@@ -227,7 +478,7 @@ class Reports(commands.Cog):
 
         if not report_channel_ids:
             print("Не могу отправить репорт — нет настроенных каналов!")
-            return
+            return False
 
         if reporter.id in blacklist:
             admin_mentions = "⚠️ Пользователь в чёрном списке!"
@@ -259,6 +510,10 @@ class Reports(commands.Cog):
             if channel := guild.get_channel(cid):
                 report_message = await channel.send(admin_mentions, embed=embed)
                 break
+
+        if not report_message:
+            print("Не могу отправить репорт — настроенные каналы не найдены на сервере!")
+            return False
 
         if report_message:
             try:
@@ -294,6 +549,7 @@ class Reports(commands.Cog):
                 print(f"Ошибка при создании ветки: {e}")
                 thread = None
 
+<<<<<<< Updated upstream
         # --- View с кнопками ---
         class ReportView(discord.ui.View):
             def __init__(self, reporter: discord.Member, guild: discord.Guild, blacklist: set, admin_roles_ids: set, thread: discord.Thread = None):
@@ -552,30 +808,16 @@ class Reports(commands.Cog):
             async def cancel_button(self, interaction: discord.Interaction, button: discord.ui.Button):
                 await interaction.response.edit_message(content="❌ Действие отменено.", view=None)
 
+=======
+>>>>>>> Stashed changes
         if report_message:
-            view = ReportView(reporter, guild, blacklist, admin_roles_ids, thread)
+            view = ReportAnswerView.build(
+                in_blacklist=(reporter.id in blacklist), 
+                has_thread=(thread is not None)
+            )
             await report_message.edit(view=view)
-# ====== Модальное окно для указания причины ======
-class ReportReasonModal(discord.ui.Modal, title="Отправка жалобы"):
-    def __init__(self, cog: Reports, target_message: discord.Message):
-        super().__init__()
-        self.cog = cog
-        self.target_message = target_message
 
-        self.reason = discord.ui.TextInput(
-            label="Причина жалобы",
-            style=discord.TextStyle.paragraph,
-            placeholder="Опишите причину жалобы...",
-            required=False,
-            max_length=500
-        )
-        self.add_item(self.reason)
-
-    async def on_submit(self, interaction: discord.Interaction):
-        await self.cog.send_report(
-            interaction.guild, interaction.user, self.target_message, str(self.reason)
-        )
-        await interaction.response.send_message("✅ Репорт отправлен администрации.", ephemeral=True)
+        return True
 
 
 # ====== Context-menu (Message) ======

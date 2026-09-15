@@ -7,6 +7,152 @@ from utils import settings_cache as settings
 from discord.ui import View, Button
 from typing import Optional
 from constants import RMC_EMBED_COLOR
+<<<<<<< Updated upstream
+=======
+from cogs.isolation import IsolatedUser
+
+BOT_NAME_REGEXES = [
+    re.compile(r"^[a-zA-Z._]+\d{3,8}\.?$", re.IGNORECASE),         # Покрывает: duelist_96035, nikitos511., echoexplorer05448
+    re.compile(r"^[a-zA-Z_]+\.[a-zA-Z]{3,5}$", re.IGNORECASE),     # Покрывает: usagii.jjj
+    re.compile(r"^[a-zA-Z]+\d+[._]+\d+$", re.IGNORECASE),          # Покрывает: asd2099._19909
+    re.compile(r"^[a-zA-Z]+[._]+\d+[._]+\d+$", re.IGNORECASE),     # Покрывает: dimitrii.87_74940
+    re.compile(r"^[\d._]+$"),                                      # Только цифры и знаки: 12345_67890
+    re.compile(r"[bcdfghjklmnpqrstvwxz]{6,}", re.IGNORECASE),      # Набор из 6+ согласных подряд: dfghjkl
+    re.compile(r"^(?:[a-zA-Z]+\d+){3,}[a-zA-Z]*$", re.IGNORECASE), # Чередование букв и цифр: a1b2c3d4
+    re.compile(r"^[a-f0-9]{10,}$", re.IGNORECASE)                  # Сгенерированные хэши: a8b4f2c9e1
+]
+
+
+async def evaluate_suspicion(member: discord.Member) -> tuple[float, list]:
+    score = 0.0
+    reasons = []
+
+    account_age_seconds = (discord.utils.utcnow() - member.created_at).total_seconds()
+
+    if account_age_seconds < 86400:
+        score += 3
+        reasons.append("Аккаунту меньше 24 часов (+3)")
+    elif account_age_seconds < 2592000: # 30 дней
+        score += 2
+        reasons.append("Аккаунту меньше месяца (+2)")
+    elif account_age_seconds < 31536000: # 365 дней
+        score += 1
+        reasons.append("Аккаунту меньше года (+1)")
+
+    if member.avatar is None:
+        score += 1.5
+        reasons.append("У аккаунта стандартный аватар (+1.5)")
+    elif member.avatar.is_animated():
+        score -= 1.5
+        reasons.append("У аккаунта анимированный аватар (-1.5)")
+
+    if member.global_name is None:
+        score += 1
+        reasons.append("У аккаунта не установлено отображаемое имя (+1)")
+
+    if not member.public_flags.value:
+        score += 0.5
+        reasons.append("У аккаунта нет значков профиля (+0.5)")
+
+    if any(pattern.match(member.name) for pattern in BOT_NAME_REGEXES):
+        score += 3
+        reasons.append("Ник попадает под паттерн спам-ботов (+3)")
+
+    return score, reasons
+
+class SuspicionActionView(discord.ui.View):
+    def __init__(self, target_member: discord.Member, bot: commands.Bot, score: float):
+        super().__init__(timeout=None)
+        self.target_member = target_member
+        self.bot = bot
+        self.score = score
+
+    @discord.ui.button(label="Изолировать", style=discord.ButtonStyle.danger)
+    async def btn_isolate(self, interaction: discord.Interaction, button: discord.ui.Button):   
+        user_roles = [
+            role for role in self.target_member.roles 
+            if not role.is_default() and not role.managed and role < interaction.guild.me.top_role
+        ]
+        user_role_ids = [role.id for role in user_roles]
+        isolation_cog = self.bot.get_cog("Isolation")
+        if not isolation_cog:
+            return await interaction.response.send_message("❌ Ошибка: Модуль изоляции не найден.", ephemeral=True)
+
+        isolated_user = IsolatedUser(
+            roles=user_role_ids,
+            isolated_at=time.time(),
+            isolated_by=interaction.user.id,
+            reason=f"[Omnivisor] Изолирован из-за высокого уровна подозрительности {self.score}"
+        )
+
+        async with isolation_cog._file_lock:
+            isolated_data = await isolation_cog.load_isolated_data()
+            isolated_data[str(self.target_member.id)] = isolated_user
+            await isolation_cog.save_isolated_data(isolated_data)
+
+        settings_data = settings.load_settings()
+        isolation_role_id = settings_data.get('isolation_role_id')
+        isolation_role = interaction.guild.get_role(isolation_role_id)
+
+        if isolation_role:
+            try:
+                new_roles = [
+                    r for r in self.target_member.roles 
+                    if r not in user_roles and r != isolation_role and not r.is_default() and not r.managed
+                ]
+                new_roles.append(isolation_role)
+                await self.target_member.edit(roles=new_roles, reason=f"Изолирован {interaction.user} через Omnivisor.")
+            except discord.Forbidden:
+                pass # Игнорируем недостаток прав, чтобы кнопка успела изменить состояние
+
+        from utils import omnivisor_db as db
+        await db.log_action(
+            action_type="Изоляция",
+            display_name=self.target_member.display_name,
+            username=self.target_member.name,
+            user_id=self.target_member.id,
+            moderator_id=interaction.user.id,
+            reason=isolated_user.reason,
+            timestamp=int(isolated_user.isolated_at),
+            joined_at=int(self.target_member.joined_at.timestamp()) if self.target_member.joined_at else 0
+        )
+        isolator_channel = interaction.guild.get_channel(settings_data.get('isolator_channel_id'))
+        if isolator_channel:
+            await isolator_channel.send(f"{self.target_member.mention} \nДоброго времени суток, это дополнительная проверка, чтобы убедиться, что вы не бот. Ответьте на это сообщение любым образом, чтобы мы могли идентифицировать в вас человека.\n\nHello, this is an additional verification step to ensure you are not a bot. Please reply to this message in any way so we can confirm that you are a human.")
+
+        for child in self.children:
+            child.disabled = True
+
+        embed = interaction.message.embeds[0]
+        embed.add_field(
+            name = "🛡️ Решение",
+            value = f"✅ Изолирован модератором {interaction.user.mention}"
+        )
+        await interaction.response.edit_message(embed=embed, view=self)
+
+    @discord.ui.button(label="Проигнорировать", style=discord.ButtonStyle.secondary)
+    async def btn_ignore(self, interaction: discord.Interaction, button: discord.ui.Button):
+        for child in self.children:
+            child.disabled = True
+
+        from utils import omnivisor_db as db
+        await db.log_action(
+            action_type="Игнорирование подозрения",
+            display_name=self.target_member.display_name,
+            username=self.target_member.name,
+            user_id=self.target_member.id,    
+            moderator_id=interaction.user.id,
+            reason="Модератор счел аккаунт безопасным",
+            timestamp=int(time.time()),
+            joined_at=int(self.target_member.joined_at.timestamp()) if self.target_member.joined_at else 0
+        )
+        embed = interaction.message.embeds[0]
+        embed.add_field(
+            name = "🛡️ Решение",
+            value = f"👀 Проигнорирован модератором {interaction.user.mention}"
+        )
+        await interaction.response.edit_message(embed=embed, view=self)
+>>>>>>> Stashed changes
 
 class Omnivisor(commands.Cog):
     """Cog для организации работы проекта Омнивизор через РМК-Бота"""
