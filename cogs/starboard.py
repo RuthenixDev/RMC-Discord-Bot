@@ -1,9 +1,15 @@
+import asyncio
+import logging
 import discord
 from discord.ext import commands
 from discord import app_commands
 from utils import settings_cache as settings
+from utils import starboard_storage
 from utils.permissions import check_cog_access
 from constants import RMC_EMBED_COLOR
+
+
+logger = logging.getLogger(__name__)
 
 
 class Starboard(commands.Cog):
@@ -11,6 +17,8 @@ class Starboard(commands.Cog):
 
     def __init__(self, bot):
         self.bot = bot
+        self._publication_locks = {}
+        self._history_locks = {}
         self.star_emoji = "⭐"
         self.block_emoji = discord.PartialEmoji(name="declined", id=1419728189059502080)
 
@@ -39,32 +47,68 @@ class Starboard(commands.Cog):
         data["starboards"] = starboards
         settings.save_settings(data)
 
+    async def _index_starboard(self, channel):
+        channel_key = str(channel.id)
+        lock = self._history_locks.setdefault(channel.id, asyncio.Lock())
+        async with lock:
+            data = starboard_storage.load_data()
+            if channel_key in data.get("starboard_indexed_channels", []):
+                return
+
+            publications = {}
+            async for post in channel.history(limit=None):
+                if post.author.id != self.bot.user.id or not post.embeds:
+                    continue
+                footer = post.embeds[0].footer.text
+                if footer and footer.startswith("ID: "):
+                    source_id = footer[4:]
+                    if source_id.isdecimal():
+                        publications.setdefault(source_id, post.id)
+
+            data = starboard_storage.load_data()
+            stored = data.setdefault("starboard_publications", {}).setdefault(channel_key, {})
+            stored.update(publications)
+            data.setdefault("starboard_indexed_channels", []).append(channel_key)
+            starboard_storage.save_data(data)
+
     @commands.Cog.listener()
     async def on_raw_reaction_add(self, payload: discord.RawReactionActionEvent):
         """Отслеживаем добавление реакции"""
         if str(payload.emoji) != self.star_emoji:
             return
 
-        channel = self.bot.get_channel(payload.channel_id)
-        if channel is None:
-            return
-
-        try:
-            message = await channel.fetch_message(payload.message_id)
-        except discord.NotFound:
-            return
-
-        # Загружаем настройки
         data = settings.load_settings()
-        excluded_messages = data.get("starboard_excluded_messages", [])
-        if payload.message_id in excluded_messages:
+        if payload.message_id in data.get("starboard_excluded_messages", []):
             return
 
         starboards = self.get_starboards(data)
         if not starboards:
             return
 
-        # Считаем количество звёзд и проверяем блокирующие реакции
+        publications = starboard_storage.load_data().get("starboard_publications", {})
+        source_id = str(payload.message_id)
+        candidates = []
+        for sb in starboards:
+            channel_id = int(sb["channel_id"])
+            if source_id in publications.get(str(channel_id), {}):
+                continue
+            starboard_channel = self.bot.get_channel(channel_id)
+            if starboard_channel is not None:
+                candidates.append((sb, starboard_channel))
+        if not candidates:
+            return
+
+        channel = self.bot.get_channel(payload.channel_id)
+        if channel is None:
+            return
+        try:
+            message = await channel.fetch_message(payload.message_id)
+        except discord.NotFound:
+            return
+        except discord.HTTPException:
+            logger.exception("Failed to fetch source message %s", payload.message_id)
+            return
+
         star_count = 0
         for reaction in message.reactions:
             if reaction.me and str(reaction.emoji) != self.star_emoji:
@@ -79,47 +123,57 @@ class Starboard(commands.Cog):
         # Формируем embed только один раз, если он вообще куда-то будет отправлен
         embed = None
 
-        for sb in starboards:
+        for sb, starboard_channel in candidates:
             target = sb.get("target", 3)
-            channel_id = sb.get("channel_id")
 
             if star_count < target:
                 continue
 
-            starboard_channel = self.bot.get_channel(int(channel_id))
-            if starboard_channel is None:
-                continue
-
             # Проверка на дубликат для этого конкретного канала
-            duplicate = False
-            async for msg in starboard_channel.history(limit=200):
-                if msg.embeds and msg.embeds[0].footer.text == f"ID: {message.id}":
-                    duplicate = True
-                    break
-            
-            if duplicate:
-                continue
-
-            if embed is None:
-                embed = discord.Embed(
-                    description=message.content or "*[без текста]*",
-                    color=discord.Color.gold()
+            pair = (message.id, starboard_channel.id)
+            lock = self._publication_locks.setdefault(pair, asyncio.Lock())
+            async with lock:
+                try:
+                    await self._index_starboard(starboard_channel)
+                except discord.HTTPException:
+                    logger.exception("Failed to index starboard channel %s", starboard_channel.id)
+                    continue
+                data = starboard_storage.load_data()
+                publications = data.setdefault("starboard_publications", {}).setdefault(
+                    str(starboard_channel.id), {}
                 )
-                embed.set_author(
-                    name=message.author.display_name,
-                    icon_url=message.author.display_avatar.url
-                )
-                embed.add_field(
-                    name="Ссылка",
-                    value=f"[Перейти к сообщению]({message.jump_url})",
-                    inline=False
-                )
-                if message.attachments:
-                    embed.set_image(url=message.attachments[0].url)
+                if str(message.id) in publications:
+                    continue
 
-                embed.set_footer(text=f"ID: {message.id}")
+                if embed is None:
+                    embed = discord.Embed(
+                        description=message.content or "*[без текста]*",
+                        color=discord.Color.gold()
+                    )
+                    embed.set_author(
+                        name=message.author.display_name,
+                        icon_url=message.author.display_avatar.url
+                    )
+                    embed.add_field(
+                        name="Ссылка",
+                        value=f"[Перейти к сообщению]({message.jump_url})",
+                        inline=False
+                    )
+                    if message.attachments:
+                        embed.set_image(url=message.attachments[0].url)
 
-            await starboard_channel.send(embed=embed)
+                    embed.set_footer(text=f"ID: {message.id}")
+
+                try:
+                    post = await starboard_channel.send(embed=embed)
+                except discord.HTTPException:
+                    logger.exception("Failed to publish message %s in channel %s", message.id, starboard_channel.id)
+                    continue
+                data = starboard_storage.load_data()
+                data.setdefault("starboard_publications", {}).setdefault(
+                    str(starboard_channel.id), {}
+                )[str(message.id)] = post.id
+                starboard_storage.save_data(data)
 
     # ========================
     # Hybrid команды
@@ -198,6 +252,18 @@ class Starboard(commands.Cog):
             
         await ctx.reply(embed=embed)
 
+    async def _reply(self, ctx, embed):
+        try:
+            await ctx.reply(embed=embed, ephemeral=True)
+        except discord.HTTPException:
+            logger.exception("Failed to reply to starboard command from user %s", ctx.author.id)
+
+    async def _send_log(self, channel, embed):
+        try:
+            await channel.send(embed=embed)
+        except discord.HTTPException:
+            logger.exception("Failed to send starboard moderation log to channel %s", channel.id)
+
     @commands.hybrid_command(name="starboard_block", description="Заблокировать сообщение для Starboard")
     @app_commands.describe(message_link="Ссылка на сообщение", custom_emoji="Кастомный эмодзи для блокировки (опционально)")
     async def starboard_block(self, ctx: commands.Context, message_link: str, custom_emoji: str = None):
@@ -211,7 +277,7 @@ class Starboard(commands.Cog):
                 description="Канал для логов не найден. Настройте через /set_log",
                 color=RMC_EMBED_COLOR
             )
-            return await ctx.reply(embed=embed, ephemeral=True)
+            return await self._reply(ctx, embed)
 
         try:
             parts = message_link.strip('/').split("/")
@@ -223,7 +289,7 @@ class Starboard(commands.Cog):
                 description="Неверный формат ссылки на сообщение.",
                 color=RMC_EMBED_COLOR
             )
-            return await ctx.reply(embed=embed, ephemeral=True)
+            return await self._reply(ctx, embed)
 
         channel = ctx.guild.get_channel(channel_id) or ctx.guild.get_thread(channel_id)
         if not channel:
@@ -232,18 +298,40 @@ class Starboard(commands.Cog):
                 description="Канал не найден.",
                 color=RMC_EMBED_COLOR
             )
-            return await ctx.reply(embed=embed, ephemeral=True)
+            return await self._reply(ctx, embed)
 
         try:
             message = await channel.fetch_message(message_id)
             emoji_to_use = custom_emoji if custom_emoji else self.block_emoji
             await message.add_reaction(emoji_to_use)
+        except discord.NotFound:
+            embed = discord.Embed(
+                title="❌ Возникла ошибка при блокировке сообщения для Starboard",
+                description="Сообщение не найдено.",
+                color=RMC_EMBED_COLOR
+            )
+            await self._reply(ctx, embed)
+        except discord.Forbidden:
+            embed = discord.Embed(
+                title="❌ Возникла ошибка при блокировке сообщения для Starboard",
+                description="У бота нет прав на добавление реакции.",
+                color=RMC_EMBED_COLOR
+            )
+            await self._reply(ctx, embed)
+        except discord.HTTPException:
+            embed = discord.Embed(
+                title="❌ Ошибка",
+                description="Не удалось поставить реакцию. Убедитесь, что эмодзи указан верно и бот имеет к нему доступ.",
+                color=RMC_EMBED_COLOR
+            )
+            await self._reply(ctx, embed)
+        else:
             embed = discord.Embed(
                 title = "✅ Успешно заблокировано сообщение для Starboard",
                 description=f"Бот поставил реакцию {emoji_to_use}.\nТеперь это сообщение не попадёт в Starboard.\n[Перейти к сообщению]({message_link})",
                 color=RMC_EMBED_COLOR
             )
-            await ctx.reply(embed=embed, ephemeral=True)
+            await self._reply(ctx, embed)
             log_embed = discord.Embed(
                 title="Модератор заблокировал сообщение для Starboard",
                 description=f"Модератор {ctx.author.mention} заблокировал сообщение для Starboard.",
@@ -254,30 +342,7 @@ class Starboard(commands.Cog):
             log_embed.add_field(name="Автор сообщения", value=f"{message.author.mention} `{message.author.id}`", inline=False)
             log_embed.add_field(name="Сообщение", value=f"[Перейти к сообщению]({message_link})", inline=False)
 
-            if log_channel:
-                await log_channel.send(embed=log_embed)
-            
-        except discord.NotFound:
-            embed = discord.Embed(
-                title="❌ Возникла ошибка при блокировке сообщения для Starboard",
-                description="Сообщение не найдено.",
-                color=RMC_EMBED_COLOR
-            )
-            await ctx.reply(embed=embed, ephemeral=True)
-        except discord.Forbidden:
-            embed = discord.Embed(
-                title="❌ Возникла ошибка при блокировке сообщения для Starboard",
-                description="У бота нет прав на добавление реакции.",
-                color=RMC_EMBED_COLOR
-            )
-            await ctx.reply(embed=embed, ephemeral=True)
-        except discord.HTTPException:
-            embed = discord.Embed(
-                title="❌ Ошибка",
-                description="Не удалось поставить реакцию. Убедитесь, что эмодзи указан верно и бот имеет к нему доступ.",
-                color=RMC_EMBED_COLOR
-            )
-            await ctx.reply(embed=embed, ephemeral=True)
+            await self._send_log(log_channel, log_embed)
 
     @commands.hybrid_command(name="starboard_unblock", description="Снять блокировку Starboard (убрать реакцию бота)")
     @app_commands.describe(message_link="Ссылка на сообщение")
@@ -292,7 +357,7 @@ class Starboard(commands.Cog):
                 description="Канал для логов не найден. Настройте через /set_log",
                 color=RMC_EMBED_COLOR
             )
-            return await ctx.reply(embed=embed, ephemeral=True)
+            return await self._reply(ctx, embed)
         
         try:
             parts = message_link.strip('/').split("/")
@@ -300,7 +365,7 @@ class Starboard(commands.Cog):
             message_id = int(parts[-1])
         except (ValueError, IndexError):
             embed = discord.Embed(description="❌ Неверный формат ссылки на сообщение.", color=discord.Color.red())
-            return await ctx.reply(embed=embed, ephemeral=True)
+            return await self._reply(ctx, embed)
 
         channel = ctx.guild.get_channel(channel_id) or ctx.guild.get_thread(channel_id)
         if not channel:
@@ -309,7 +374,7 @@ class Starboard(commands.Cog):
                 description="Канал не найден.",
                 color=RMC_EMBED_COLOR
             )
-            return await ctx.reply(embed=embed, ephemeral=True)
+            return await self._reply(ctx, embed)
 
         try:
             message = await channel.fetch_message(message_id)
@@ -320,6 +385,27 @@ class Starboard(commands.Cog):
                     await message.remove_reaction(reaction.emoji, self.bot.user)
                     removed_emojis.append(str(reaction.emoji))
 
+        except discord.NotFound:
+            embed = discord.Embed(
+                title="❌ Возникла ошибка при разблокировке сообщения для Starboard",
+                description="Сообщение не найдено.",
+                color=RMC_EMBED_COLOR
+            )
+            await self._reply(ctx, embed)
+        except discord.Forbidden:
+            embed = discord.Embed(
+                title="❌ Возникла ошибка при разблокировке сообщения для Starboard",
+                description="У бота нет прав на удаление реакции.",
+                color=RMC_EMBED_COLOR
+            )
+            await self._reply(ctx, embed)
+        except discord.HTTPException:
+            embed = discord.Embed(
+                description="Не удалось удалить блокирующие реакции. Попробуйте ещё раз.",
+                color=RMC_EMBED_COLOR
+            )
+            await self._reply(ctx, embed)
+        else:
             if removed_emojis:
                 emojis_str = ", ".join(removed_emojis)
                 embed = discord.Embed(
@@ -327,14 +413,14 @@ class Starboard(commands.Cog):
                     description=f"Бот убрал реакцию(и) {emojis_str}.\nТеперь это сообщение снова может попасть в Starboard.\n[Перейти к сообщению]({message_link})",
                     color=RMC_EMBED_COLOR
                 )
-                await ctx.reply(embed=embed, ephemeral=True)
+                await self._reply(ctx, embed)
             else:
                 embed = discord.Embed(
                     title="⚠️ Сообщение не было заблокировано",
                     description="Бот не ставил блокирующих реакций на это сообщение.",
                     color=discord.Color.orange()
                 )
-                return await ctx.reply(embed=embed, ephemeral=True)
+                return await self._reply(ctx, embed)
 
             log_embed = discord.Embed(
                 title="Модератор разблокировал сообщение для Starboard",
@@ -346,23 +432,7 @@ class Starboard(commands.Cog):
             log_embed.add_field(name="Автор сообщения", value=f"{message.author.mention} `{message.author.id}`", inline=False)
             log_embed.add_field(name="Сообщение", value=f"[Перейти к сообщению]({message_link})", inline=False)
             
-            if log_channel:
-                await log_channel.send(embed=log_embed)
-
-        except discord.NotFound:
-            embed = discord.Embed(
-                title="❌ Возникла ошибка при разблокировке сообщения для Starboard",
-                description="Сообщение не найдено.",
-                color=RMC_EMBED_COLOR
-            )
-            await ctx.reply(embed=embed, ephemeral=True)
-        except discord.Forbidden:
-            embed = discord.Embed(
-                title="❌ Возникла ошибка при разблокировке сообщения для Starboard",
-                description="У бота нет прав на удаление реакции.",
-                color=RMC_EMBED_COLOR
-            )
-            await ctx.reply(embed=embed, ephemeral=True)
+            await self._send_log(log_channel, log_embed)
 
 async def setup(bot):
     await bot.add_cog(Starboard(bot))

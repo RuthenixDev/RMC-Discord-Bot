@@ -1,5 +1,7 @@
 .env
 settings.json
+starboard_publications.json
+starboard_publications.json.tmp
 *.pyc
 RMC-Discord-Bot.code-workspace
 isolated_users.json
